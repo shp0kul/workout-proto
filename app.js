@@ -1,11 +1,12 @@
 // ===========================
-// СПОРТ ДНЕВНИК — WebApp v1.1
-// Цикл без привязки к датам. WOD с ред/удал.
+// СПОРТ ДНЕВНИК — WebApp v1.2
+// Batch-загрузка + кэш + мгновенный рендер
 // ===========================
 
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycby13Q30X_zwMIAGlak9L4uj_P-00Ak75_hFrxrhvC54nhH2qitukv8eHWqtSL1m-nge/exec';
 const STORAGE_KEY = 'workout_log_v1';
 const LAST_USER_KEY = 'workout_last_user';
+const CACHE_PREFIX = 'wd_cache_';
 
 const $ = (s, c = document) => c.querySelector(s);
 const $$ = (s, c = document) => [...c.querySelectorAll(s)];
@@ -23,6 +24,9 @@ function setStored(key, reps) {
   l.cycle[key] = { reps, at: Date.now() };
   saveLocal(l);
 }
+function cacheKey(uid) { return CACHE_PREFIX + uid; }
+function getCache(uid) { try { return JSON.parse(localStorage.getItem(cacheKey(uid)) || 'null'); } catch { return null; } }
+function setCache(uid, data) { localStorage.setItem(cacheKey(uid), JSON.stringify(data)); }
 
 async function apiGet(params) {
   const q = new URLSearchParams(params).toString();
@@ -50,36 +54,34 @@ let basesCache = null;
 let appliedBases = null;
 let saveTimers = {};
 let isAdmin = false;
-let currentWod = null;       // актуальный WOD (для редактирования)
-let editWodMode = false;     // режим редактирования формы
+let currentWod = null;
+let editWodMode = false;
+let dataLoaded = false;
 
 async function init() {
   if (window.Telegram?.WebApp) {
     Telegram.WebApp.ready();
     Telegram.WebApp.expand();
-    if (Telegram.WebApp.initDataUnsafe?.user?.id) {
-      isAdmin = (Telegram.WebApp.initDataUnsafe.user.id === 594920142);
-    }
+    if (Telegram.WebApp.initDataUnsafe?.user?.id) isAdmin = (Telegram.WebApp.initDataUnsafe.user.id === 594920142);
   }
+  const last = localStorage.getItem(LAST_USER_KEY);
+  if (last) currentUser = parseInt(last);
+  buildTabs();
+  buildSelectors();
+  // Мгновенно рисуем из кэша, если есть
   await loadUsers();
+  renderFromCache();
+  // Параллельно подгружаем свежие данные
+  await loadBatch();
 }
 
 async function loadUsers() {
-  const last = localStorage.getItem(LAST_USER_KEY);
-  if (last) currentUser = parseInt(last);
   try {
     const data = await apiGet({ users: '1' });
     usersList = data.users || [];
     if (!usersList.find(u => u.id == currentUser)) currentUser = usersList[0]?.id || currentUser;
-  } catch (e) {
-    console.error('Users load error', e);
-    usersList = [{ id: currentUser, name: 'Игорь' }];
-  }
+  } catch (e) { console.error('Users load error', e); usersList = [{ id: currentUser, name: 'Игорь' }]; }
   buildUserTabs();
-  buildTabs();
-  buildSelectors();
-  await loadScheme(state.week, state.exercise);
-  render();
 }
 
 function buildUserTabs() {
@@ -88,29 +90,24 @@ function buildUserTabs() {
   usersList.forEach(u => {
     const t = document.createElement('button');
     t.className = 'utab' + (u.id == currentUser ? ' active' : '');
-    t.textContent = u.name;
-    t.dataset.uid = u.id;
+    t.textContent = u.name; t.dataset.uid = u.id;
     t.onclick = async () => {
       currentUser = u.id;
       localStorage.setItem(LAST_USER_KEY, currentUser);
-      maxesCache = null; basesCache = null; appliedBases = null;
+      maxesCache = null; basesCache = null; appliedBases = null; dataLoaded = false;
       isAdmin = (u.name === 'Игорь') || isAdmin;
       buildUserTabs();
-      await loadScheme(state.week, state.exercise);
-      render();
+      renderFromCache();
+      await loadBatch();
     };
     bar.appendChild(t);
   });
   const add = document.createElement('button');
-  add.className = 'utab utab-add';
-  add.textContent = '+';
-  add.onclick = addUser;
+  add.className = 'utab utab-add'; add.textContent = '+'; add.onclick = addUser;
   bar.appendChild(add);
   if (isAdmin && usersList.length > 1) {
     const del = document.createElement('button');
-    del.className = 'utab utab-del';
-    del.textContent = '−';
-    del.title = 'Удалить текущую вкладку';
+    del.className = 'utab utab-del'; del.textContent = '−'; del.title = 'Удалить текущую вкладку';
     del.onclick = deleteCurrentUser;
     bar.appendChild(del);
   }
@@ -124,10 +121,10 @@ async function deleteCurrentUser() {
     await apiPost({ action: 'delete_user', viewer_id: 594920142, user_id: currentUser });
     usersList = usersList.filter(x => x.id != currentUser);
     currentUser = usersList[0]?.id;
-    maxesCache = null; basesCache = null; appliedBases = null;
+    maxesCache = null; basesCache = null; appliedBases = null; dataLoaded = false;
     buildUserTabs();
-    await loadScheme(state.week, state.exercise);
-    render();
+    renderFromCache();
+    await loadBatch();
     flashSync('🗑 Удалён: ' + u.name);
   } catch (e) { console.error(e); flashSync('🟡 Ошибка удаления'); }
 }
@@ -140,25 +137,40 @@ async function addUser() {
     if (res.success) {
       usersList.push(res.user);
       currentUser = res.user.id;
-      maxesCache = null; basesCache = null; appliedBases = null;
+      maxesCache = null; basesCache = null; appliedBases = null; dataLoaded = false;
       buildUserTabs();
-      await loadScheme(state.week, state.exercise);
-      render();
+      renderFromCache();
+      await loadBatch();
       flashSync('✅ Добавлен: ' + res.user.name);
     }
   } catch (e) { console.error(e); flashSync('🟡 Ошибка добавления'); }
 }
 
-async function loadScheme(week, exercise) {
-  state.week = week;
-  state.exercise = exercise;
+async function loadBatch() {
   try {
-    const data = await apiGet({ user_id: currentUser, week, exercise });
-    state.plan = data.plan || [];
+    const data = await apiGet({ batch: '1', user_id: currentUser, week: state.week, exercise: state.exercise });
+    basesCache = data.bases || {};
+    appliedBases = { ...basesCache };
+    maxesCache = data.maxes || [];
+    // Фильтруем план по текущей неделе/упражнению (batch вернул весь цикл)
+    state.plan = (data.plan || []).filter(p => p.week === state.week && p.exercise === state.exercise);
+    setCache(currentUser, data);
+    dataLoaded = true;
+    render();
   } catch (e) {
-    console.error('Scheme load error', e);
-    state.plan = [];
+    console.error('Batch load error', e);
+    flashSync('🟡 Нет связи — кэш');
   }
+}
+
+function renderFromCache() {
+  const c = getCache(currentUser);
+  if (!c) return;
+  basesCache = c.bases || {};
+  appliedBases = { ...basesCache };
+  maxesCache = c.maxes || [];
+  state.plan = (c.plan || []).filter(p => p.week === state.week && p.exercise === state.exercise);
+  render();
 }
 
 function buildTabs() {
@@ -167,8 +179,8 @@ function buildTabs() {
       tab = t.dataset.tab;
       $$('.tab').forEach(x => x.classList.toggle('active', x.dataset.tab === tab));
       $('#selectors').style.display = (tab === 'strength') ? 'flex' : 'none';
-      if (tab === 'strength') { loadScheme(state.week, state.exercise).then(render); }
-      else if (tab === 'max') loadMax();
+      if (tab === 'strength') render();
+      else if (tab === 'max') renderMax();
       else if (tab === 'wod') loadWod();
       else if (tab === 'wodarch') loadWodArch();
     };
@@ -180,57 +192,48 @@ function buildSelectors() {
   const exSel = $('#exSelect');
   weekSel.innerHTML = ''; exSel.innerHTML = '';
   [1, 2, 3, 4].forEach(w => {
-    const o = document.createElement('option');
-    o.value = w; o.textContent = WEEK_LABELS[w];
-    weekSel.appendChild(o);
+    const o = document.createElement('option'); o.value = w; o.textContent = WEEK_LABELS[w]; weekSel.appendChild(o);
   });
   EX_LIST.forEach(ex => {
-    const o = document.createElement('option');
-    o.value = ex; o.textContent = ex;
-    exSel.appendChild(o);
+    const o = document.createElement('option'); o.value = ex; o.textContent = ex; exSel.appendChild(o);
   });
   weekSel.onchange = onSelect;
   exSel.onchange = onSelect;
 }
 
 async function onSelect() {
-  await loadScheme(parseInt($('#weekSelect').value), $('#exSelect').value);
-  render();
+  state.week = parseInt($('#weekSelect').value);
+  state.exercise = $('#exSelect').value;
+  const c = getCache(currentUser);
+  if (c) { state.plan = (c.plan || []).filter(p => p.week === state.week && p.exercise === state.exercise); render(); }
+  await loadBatch();
 }
 
 function targetText(t) { return typeof t === 'string' ? t : (t + ' повторов'); }
 
 function render() {
   $('#dayBadge').textContent = WEEK_LABELS[state.week] + ' • ' + state.exercise;
-
   if (tab === 'max') { $('#selectors').style.display = 'none'; renderMax(); return; }
-
   $('#selectors').style.display = 'flex';
   $('#weekSelect').value = state.week;
   $('#exSelect').value = state.exercise;
-
   const cont = $('#exerciseList');
   cont.innerHTML = '';
   const local = getStored();
   allPlansByKey = {};
-
   if (state.plan.length === 0) {
     cont.innerHTML = '<div class="empty">Нет данных для выбора 💤</div>';
     updateSyncStatus();
     return;
   }
-
   const works = state.plan.filter(s => s.setType === 'work');
   const lastWork = works[works.length - 1];
   const editableKey = lastWork ? lk(lastWork) : null;
-
   const g = document.createElement('div');
   g.className = 'exercise-group';
   const h = document.createElement('div');
-  h.className = 'exercise-header';
-  h.textContent = state.exercise;
+  h.className = 'exercise-header'; h.textContent = state.exercise;
   g.appendChild(h);
-
   state.plan.forEach(s => {
     const key = lk(s);
     allPlansByKey[key] = s;
@@ -238,12 +241,10 @@ function render() {
     const saved = local[key];
     const row = document.createElement('div');
     row.className = 'set-row ' + (editable ? 'editable' : 'readonly') + (saved ? ' completed' : '');
-    const left = `
-      <div class="set-info">
-        <span class="set-label">${s.setType === 'warmup' ? 'Разминка' : 'Рабочий'} ${s.setNum}</span>
-        <span class="set-weight">${s.weight} кг</span>
-        <span class="set-target">цель: ${targetText(s.targetReps)}</span>
-      </div>`;
+    const left = `<div class="set-info">
+      <span class="set-label">${s.setType === 'warmup' ? 'Разминка' : 'Рабочий'} ${s.setNum}</span>
+      <span class="set-weight">${s.weight} кг</span>
+      <span class="set-target">цель: ${targetText(s.targetReps)}</span></div>`;
     if (editable) {
       row.innerHTML = left + `<input type="number" class="set-reps-input" placeholder="повторы" min="0" max="99" data-key="${key}" ${saved ? 'value="' + saved.reps + '"' : ''}>`;
     } else {
@@ -252,26 +253,8 @@ function render() {
     g.appendChild(row);
   });
   cont.appendChild(g);
-
   bindEvents();
   updateSyncStatus();
-}
-
-async function loadMax() {
-  if (!basesCache) {
-    try { const b = await apiGet({ user_id: currentUser, bases: '1' }); basesCache = b.bases; appliedBases = b.bases; }
-    catch (e) { console.error(e); basesCache = {}; appliedBases = {}; }
-  }
-  if (!maxesCache) {
-    try { const m = await apiGet({ user_id: currentUser, maxes: '1' }); maxesCache = m.maxes || []; }
-    catch (e) { console.error(e); maxesCache = []; }
-  }
-  renderMax();
-}
-
-function targetNum(t) {
-  if (typeof t === 'string') return parseInt(t) || 0;
-  return Number(t) || 0;
 }
 
 function renderMax() {
@@ -294,20 +277,16 @@ function renderMax() {
     let cells = `<div class="max-ex">${row.exercise}</div>`;
     cells += `<div class="max-cell">
       <input type="number" class="base-input" data-ex="${row.exercise}" value="${baseVal != null ? baseVal : ''}" placeholder="кг">
-      <span class="base-applied">применено: ${appliedVal != null ? appliedVal : '—'} кг</span>
-    </div>`;
+      <span class="base-applied">применено: ${appliedVal != null ? appliedVal : '—'} кг</span></div>`;
     wkOrder.forEach(w => {
       const d = row.weeks[w] || {};
       const wTxt = d.weight != null ? d.weight : '—';
       const aTxt = d.actual != null ? d.actual : '';
-      const tNum = targetNum(d.target);
+      const tNum = typeof d.target === 'string' ? (parseInt(d.target) || 0) : (Number(d.target) || 0);
       let cls = '';
       if (aTxt !== '' && aTxt !== null && aTxt !== undefined) cls = (Number(aTxt) >= tNum) ? 'ok' : 'bad';
       const repTxt = aTxt !== '' && aTxt != null ? `${aTxt} <span class="max-tgt">/ ${d.target}</span>` : (d.target || '');
-      cells += `<div class="max-cell ${cls}">
-        <span class="max-w">${wTxt} кг</span>
-        <span class="max-rep">${repTxt}</span>
-      </div>`;
+      cells += `<div class="max-cell ${cls}"><span class="max-w">${wTxt} кг</span><span class="max-rep">${repTxt}</span></div>`;
     });
     r.innerHTML = cells;
     table.appendChild(r);
@@ -337,7 +316,7 @@ async function doRecalc() {
       bench: basesCache['Жим лёжа'], squat: basesCache['Приседания']
     });
     maxesCache = null; appliedBases = b.bases;
-    await loadMax();
+    await loadBatch();
     flashSync('✅ Перерасчёт готов');
   } catch (e) { console.error(e); flashSync('🟡 Ошибка перерасчёта'); }
   finally { btn.disabled = false; btn.textContent = '🔄 Перерасчёт весов'; }
@@ -347,8 +326,7 @@ function bindEvents() {
   $$('.set-reps-input').forEach(inp => {
     inp.oninput = () => inp.classList.toggle('filled', inp.value !== '');
     inp.onchange = async e => {
-      const v = +e.target.value;
-      const key = e.target.dataset.key;
+      const v = +e.target.value; const key = e.target.dataset.key;
       if (!isNaN(v) && v >= 0) await saveSet(key, v);
     };
   });
@@ -375,21 +353,14 @@ async function loadWod() {
   const cont = $('#exerciseList');
   $('#dayBadge').textContent = '🔥 WOD';
   cont.innerHTML = '<div class="empty">⏳ загрузка…</div>';
-  try {
-    const data = await apiGet({ wod: 'today' });
-    currentWod = data.wod || null;
-    renderWod();
-  } catch (e) { console.error(e); cont.innerHTML = '<div class="empty">Ошибка загрузки</div>'; }
+  try { const data = await apiGet({ wod: 'today' }); currentWod = data.wod || null; renderWod(); }
+  catch (e) { console.error(e); cont.innerHTML = '<div class="empty">Ошибка загрузки</div>'; }
 }
 
 function renderWod() {
   const cont = $('#exerciseList');
   cont.innerHTML = '';
-  if (!currentWod) {
-    cont.innerHTML = '<div class="empty">Пока нет актуального WOD 💤</div>';
-    if (isAdmin) renderWodAdmin(cont);
-    return;
-  }
+  if (!currentWod) { cont.innerHTML = '<div class="empty">Пока нет актуального WOD 💤</div>'; if (isAdmin) renderWodAdmin(cont); return; }
   const card = document.createElement('div');
   card.className = 'wod-card';
   card.innerHTML = `<div class="wod-date">${currentWod.date}</div><h2 class="wod-title">${escapeHtml(currentWod.name)}</h2><div class="wod-text">${escapeHtml(currentWod.text).replace(/\n/g, '<br>')}</div>`;
@@ -401,16 +372,14 @@ function renderWodAdmin(cont) {
   const wrap = document.createElement('div');
   wrap.className = 'wod-admin';
   const editing = editWodMode && currentWod;
-  wrap.innerHTML = `
-    <details ${editing ? 'open' : ''}>
+  wrap.innerHTML = `<details ${editing ? 'open' : ''}>
       <summary>${editing ? '✏️ Редактировать WOD' : '➕ Добавить WOD (админ)'}</summary>
       <div class="wod-form">
         <input type="text" id="wodName" placeholder="Название" class="wod-input" value="${editing ? escapeHtml(currentWod.name) : ''}">
         <textarea id="wodText" placeholder="Описание комплекса" class="wod-textarea" rows="5">${editing ? escapeHtml(currentWod.text) : ''}</textarea>
         <button id="wodSave" class="recalc-btn">${editing ? 'Сохранить изменения' : 'Сохранить WOD'}</button>
         ${editing ? '<button id="wodCancel" class="utab">Отмена</button>' : ''}
-      </div>
-    </details>`;
+      </div></details>`;
   cont.appendChild(wrap);
   if (!editing && currentWod) {
     const actions = document.createElement('div');
@@ -429,15 +398,9 @@ function renderWodAdmin(cont) {
     const text = wrap.querySelector('#wodText').value.trim();
     if (!name) { alert('Введите название'); return; }
     try {
-      if (editing) {
-        await apiPost({ action: 'edit_wod', viewer_id: 594920142, id: currentWod.id, name, text });
-        flashSync('✅ WOD обновлён');
-      } else {
-        await apiPost({ action: 'add_wod', viewer_id: 594920142, name, text });
-        flashSync('✅ WOD добавлен');
-      }
-      editWodMode = false;
-      await loadWod();
+      if (editing) { await apiPost({ action: 'edit_wod', viewer_id: 594920142, id: currentWod.id, name, text }); flashSync('✅ WOD обновлён'); }
+      else { await apiPost({ action: 'add_wod', viewer_id: 594920142, name, text }); flashSync('✅ WOD добавлен'); }
+      editWodMode = false; await loadWod();
     } catch (e) { console.error(e); flashSync('🟡 Ошибка'); }
   };
   const cancel = wrap.querySelector('#wodCancel');
@@ -447,10 +410,8 @@ function renderWodAdmin(cont) {
 async function loadWodArch() {
   const cont = $('#exerciseList');
   cont.innerHTML = '<div class="empty">⏳ загрузка…</div>';
-  try {
-    const data = await apiGet({ wods: '1' });
-    renderWodArch(data.wods || [], cont);
-  } catch (e) { console.error(e); cont.innerHTML = '<div class="empty">Ошибка загрузки</div>'; }
+  try { const data = await apiGet({ wods: '1' }); renderWodArch(data.wods || [], cont); }
+  catch (e) { console.error(e); cont.innerHTML = '<div class="empty">Ошибка загрузки</div>'; }
 }
 
 function renderWodArch(wods, cont) {
@@ -469,9 +430,7 @@ function renderWodArch(wods, cont) {
       card.innerHTML = `<div class="wod-date">${w.date}</div><h2 class="wod-title">${escapeHtml(w.name)}</h2><div class="wod-text">${escapeHtml(w.text).replace(/\n/g, '<br>')}</div>`;
       cont.appendChild(card);
       const back = document.createElement('button');
-      back.className = 'utab';
-      back.textContent = '← Архив';
-      back.onclick = () => loadWodArch();
+      back.className = 'utab'; back.textContent = '← Архив'; back.onclick = () => loadWodArch();
       cont.appendChild(back);
     };
     list.appendChild(item);
@@ -485,8 +444,7 @@ function escapeHtml(s) {
 
 function flashSync(text) {
   const el = $('#syncStatus');
-  el.textContent = text;
-  el.classList.add('flash');
+  el.textContent = text; el.classList.add('flash');
   setTimeout(() => el.classList.remove('flash'), 1200);
   setTimeout(updateSyncStatus, 1400);
 }
