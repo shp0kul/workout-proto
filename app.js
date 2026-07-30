@@ -1,8 +1,9 @@
 // ===========================
-// СПОРТ ДНЕВНИК — WebApp v0.2 (minimal)
+// СПОРТ ДНЕВНИК — WebApp v0.2
+// Бэкенд: Google Apps Script (плоский план)
 // ===========================
 
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwyoi2BNSWJ1LNPa_LzkhLWJ_-grRfT_HjnKO1XHUR2X81JUsNhH0a6EahbpL-V__zC/exec';
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycby13Q30X_zwMIAGlak9L4uj_P-00Ak75_hFrxrhvC54nhH2qitukv8eHWqtSL1m-nge/exec';
 const STORAGE_KEY = 'workout_log_v1';
 
 const $ = (s, c = document) => c.querySelector(s);
@@ -14,10 +15,11 @@ function dayNameRu(d = new Date()) { return ['Воскресенье','Поне�
 function loadLocal() { try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); } catch { return {}; } }
 function saveLocal(d) { localStorage.setItem(STORAGE_KEY, JSON.stringify(d)); }
 function getTodayLocal() { return loadLocal()[todayKey()] || {}; }
-function setLocal(exIdx, setIdx, reps) { const l = loadLocal(); const k = todayKey(); if (!l[k]) l[k] = {}; if (!l[k][exIdx]) l[k][exIdx] = {}; l[k][exIdx][setIdx] = { reps, at: Date.now() }; saveLocal(l); }
+function setLocal(flatIdx, reps) { const l = loadLocal(); const k = todayKey(); if (!l[k]) l[k] = {}; l[k][flatIdx] = { reps, at: Date.now() }; saveLocal(l); }
 
-async function apiGet(userId) {
-  const r = await fetch(APPS_SCRIPT_URL + '?user_id=' + userId);
+async function apiGet(userId, date) {
+  const url = `${APPS_SCRIPT_URL}?user_id=${userId}&date=${date}`;
+  const r = await fetch(url);
   if (!r.ok) throw new Error('HTTP ' + r.status);
   return r.json();
 }
@@ -27,34 +29,54 @@ async function apiPost(payload) {
   return r.json();
 }
 
-let currentUser = null, todayPlan = [];
+let currentUser = null;
+let todayPlan = [];   // плоский массив
 
 async function init() {
-  if (window.Telegram?.WebApp) { Telegram.WebApp.ready(); Telegram.WebApp.expand(); currentUser = Telegram.WebApp.initDataUnsafe?.user?.id; }
-  if (!currentUser) currentUser = 594920142; // fallback
+  if (window.Telegram?.WebApp) {
+    Telegram.WebApp.ready();
+    Telegram.WebApp.expand();
+    currentUser = Telegram.WebApp.initDataUnsafe?.user?.id;
+  }
+  if (!currentUser) currentUser = 594920142; // fallback для теста в браузере
+
   $('#dayBadge').textContent = dayNameRu();
+  const date = todayKey();
   try {
-    const data = await apiGet(currentUser);
+    const data = await apiGet(currentUser, date);
     todayPlan = data.plan || [];
-  } catch (e) { console.error(e); todayPlan = []; }
+  } catch (e) {
+    console.error('Load error', e);
+    todayPlan = [];
+  }
   render();
 }
 
 function render() {
-  const cont = $('#exerciseList'); cont.innerHTML = '';
+  const cont = $('#exerciseList');
+  cont.innerHTML = '';
   const local = getTodayLocal();
 
-  // Группируем по упражнению
-  const byEx = {};
-  todayPlan.forEach(item => { if (!byEx[item.exercise]) byEx[item.exercise] = []; byEx[item.exercise].push(item); });
+  // Группируем по упражнению, но храним плоский индекс
+  const groups = {};
+  todayPlan.forEach((item, flatIdx) => {
+    if (!groups[item.exercise]) groups[item.exercise] = [];
+    groups[item.exercise].push({ ...item, flatIdx });
+  });
 
-  Object.entries(byEx).forEach(([exName, sets], exIdx) => {
-    const g = document.createElement('div'); g.className = 'exercise-group';
-    const h = document.createElement('div'); h.className = 'exercise-header'; h.textContent = exName; g.appendChild(h);
+  Object.entries(groups).forEach(([exName, items]) => {
+    const g = document.createElement('div');
+    g.className = 'exercise-group';
+    const h = document.createElement('div');
+    h.className = 'exercise-header';
+    h.textContent = exName;
+    g.appendChild(h);
 
-    sets.forEach((s, si) => {
-      const row = document.createElement('div'); row.className = 'set-row';
-      const done = local[exIdx]?.[si]?.reps != null; if (done) row.classList.add('completed');
+    items.forEach((s, si) => {
+      const row = document.createElement('div');
+      row.className = 'set-row';
+      const done = local[s.flatIdx]?.reps != null;
+      if (done) row.classList.add('completed');
       const target = typeof s.targetReps === 'string' ? s.targetReps : s.targetReps + ' повторов';
       row.innerHTML = `
         <div class="set-info">
@@ -62,47 +84,83 @@ function render() {
           <span class="set-weight">${s.weight} кг</span>
           <span class="set-target">цель: ${target}</span>
         </div>
-        <input type="number" class="set-reps-input" placeholder="—" min="0" max="99" data-ex="${exIdx}" data-set="${si}" ${done ? 'value="' + local[exIdx][si].reps + '"' : ''}>
-        <button class="set-done ${done ? 'done' : ''}" data-ex="${exIdx}" data-set="${si}">${done ? '✓' : '✕'}</button>
+        <input type="number" class="set-reps-input" placeholder="—" min="0" max="99"
+          data-flat="${s.flatIdx}" ${done ? 'value="' + local[s.flatIdx].reps + '"' : ''}>
+        <button class="set-done ${done ? 'done' : ''}" data-flat="${s.flatIdx}">${done ? '✓' : '✕'}</button>
       `;
       g.appendChild(row);
     });
     cont.appendChild(g);
   });
 
-  bindEvents(local);
-  $('#syncStatus').textContent = Object.values(local).reduce((s, ex) => s + Object.keys(ex).length, 0) ? '🟢 Локально' : '🟡 Пусто';
+  bindEvents();
+  updateSyncStatus();
 }
 
-function bindEvents(local) {
+function bindEvents() {
   $$('.set-reps-input').forEach(inp => {
     inp.oninput = () => inp.classList.toggle('filled', inp.value !== '');
-    inp.onchange = async e => { const v = +e.target.value; if (!isNaN(v) && v >= 0) await saveSet(+e.target.dataset.ex, +e.target.dataset.set, v); };
+    inp.onchange = async e => {
+      const v = +e.target.value;
+      if (!isNaN(v) && v >= 0) await saveSet(+e.target.dataset.flat, v);
+    };
   });
   $$('.set-done').forEach(btn => {
     btn.onclick = async () => {
-      const ex = +btn.dataset.ex, set = +btn.dataset.set;
+      const flat = +btn.dataset.flat;
       const l = getTodayLocal();
-      if (l[ex]?.[set]?.reps != null) { delete l[ex][set]; if (!Object.keys(l[ex]||{}).length) delete l[ex]; saveLocal(l); }
-      else { const v = +prompt('Повторов?', 5); if (!isNaN(v) && v >= 0) await saveSet(ex, set, v); }
+      if (l[flat]?.reps != null) {
+        delete l[flat];
+        saveLocal(l);
+      } else {
+        const v = +prompt('Сколько повторов сделано?', 5);
+        if (!isNaN(v) && v >= 0) await saveSet(flat, v);
+      }
       render();
     };
   });
 }
 
-async function saveSet(exIdx, setIdx, reps) {
-  setLocal(exIdx, setIdx, reps);
-  // Находим план
-  let flatIdx = 0, found = null;
-  for (const p of todayPlan) {
-    for (let si = 0; si < p.sets.length; si++) {
-      if (flatIdx === exIdx && si === setIdx) { found = { ...p.sets[si], exercise: p.exercise, week: p.week, day: p.day }; break; }
-      flatIdx++;
-    } if (found) break;
+async function saveSet(flatIdx, reps) {
+  setLocal(flatIdx, reps);
+  const s = todayPlan[flatIdx];
+  if (!s) return;
+  try {
+    await apiPost({
+      user_id: currentUser,
+      week: s.week, day: s.day, exercise: s.exercise,
+      set_num: s.setNum, set_type: s.setType,
+      weight: s.weight, target_reps: s.targetReps, actual_reps: reps
+    });
+  } catch (e) {
+    console.warn('Sync failed (local saved)', e);
   }
-  if (!found) return;
-  try { await apiPost({ user_id: currentUser, week: found.week, day: found.day, exercise: found.exercise, set_num: found.setNum, set_type: found.setType, weight: found.weight, target_reps: found.targetReps, actual_reps: reps }); }
-  catch (e) { console.warn('Sync later', e); }
+}
+
+function updateSyncStatus() {
+  const l = getTodayLocal();
+  const done = Object.keys(l).length;
+  $('#syncStatus').textContent = done > 0 ? `🟢 Локально (${done}/${todayPlan.length})` : '🟡 Пусто';
+}
+
+async function syncAll() {
+  const l = getTodayLocal();
+  let ok = 0, fail = 0;
+  for (const flatIdx of Object.keys(l)) {
+    const s = todayPlan[flatIdx];
+    if (!s) continue;
+    try {
+      await apiPost({
+        user_id: currentUser,
+        week: s.week, day: s.day, exercise: s.exercise,
+        set_num: s.setNum, set_type: s.setType,
+        weight: s.weight, target_reps: s.targetReps, actual_reps: l[flatIdx].reps
+      });
+      ok++;
+    } catch { fail++; }
+  }
+  $('#syncStatus').textContent = `🟢 Отправлено: ${ok}, ошибок: ${fail}`;
+  setTimeout(updateSyncStatus, 2000);
 }
 
 document.addEventListener('DOMContentLoaded', init);
