@@ -1,1 +1,81 @@
-const STORAGE_KEY='workout_log_v1';const TRAINER_ID=594920142;const MOCK_PLAN=[{exercise:'Жим стоя',sets:[{set:1,weight:50,targetReps:3},{set:2,weight:55,targetReps:5},{set:3,weight:60,targetReps:8}]},{exercise:'Жим лёжа',sets:[{set:1,weight:60,targetReps:5},{set:2,weight:70,targetReps:5},{set:3,weight:80,targetReps:5}]},{exercise:'Приседания',sets:[{set:1,weight:80,targetReps:5},{set:2,weight:90,targetReps:5},{set:3,weight:100,targetReps:5}]}];const $=(s,c=document)=>c.querySelector(s);const $$=(s,c=document)=>[...c.querySelectorAll(s)];function todayKey(){return new Date().toISOString().slice(0,10)}function dayNameRu(d=new Date()){return['Воскресенье','Понедельник','Вторник','Среда','Четверг','Пятница','Суббота'][d.getDay()]}function loadLog(){try{return JSON.parse(localStorage.getItem(STORAGE_KEY)||'{}')}catch{return{}}}function saveLog(l){localStorage.setItem(STORAGE_KEY,JSON.stringify(l))}function getTodayLog(){return loadLog()[todayKey()]||{}}function setSetDone(ex,set,reps){const l=loadLog();const k=todayKey();if(!l[k])l[k]={};if(!l[k][ex])l[k][ex]={};l[k][ex][set]={reps,at:Date.now()};saveLog(l)}function render(){$('#dayBadge').textContent=dayNameRu();const log=getTodayLog();const c=$('#exerciseList');c.innerHTML='';MOCK_PLAN.forEach((ex,exIdx)=>{const g=document.createElement('div');g.className='exercise-group';const h=document.createElement('div');h.className='exercise-header';h.textContent=ex.exercise;g.appendChild(h);ex.sets.forEach((s,setIdx)=>{const r=document.createElement('div');r.className='set-row';const d=log[exIdx]?.[setIdx]?.reps!=null;if(d)r.classList.add('completed');r.innerHTML=`<div class="set-info"><span class="set-label">Подход ${s.set}</span><span class="set-weight">${s.weight} кг</span><span class="set-target">цель: ${s.targetReps} повторов</span></div><input type="number" class="set-reps-input" placeholder="—" min="0" max="99" data-ex="${exIdx}" data-set="${setIdx}" ${d?`value="${log[exIdx][setIdx].reps}"`:''}><button class="set-done ${d?'done':''}" data-ex="${exIdx}" data-set="${setIdx}" aria-label="${d?'Сбросить':'Готово'}">${d?'✓':'✕'}</button>`;g.appendChild(r)});c.appendChild(g)});bindEvents();updateSyncStatus()}function bindEvents(){$$('.set-reps-input').forEach(i=>{i.addEventListener('input',e=>{e.target.classList.toggle('filled',e.target.value!=='')});i.addEventListener('change',e=>{const ex=+e.target.dataset.ex,set=+e.target.dataset.set,val=+e.target.value;if(!isNaN(val)&&val>=0){setSetDone(ex,set,val);render()}})});$$('.set-done').forEach(b=>{b.addEventListener('click',e=>{const ex=+e.currentTarget.dataset.ex,set=+e.currentTarget.dataset.set;const log=getTodayLog();const existing=log[ex]?.[set]?.reps;if(existing!=null){delete log[ex][set];if(Object.keys(log[ex]||{}).length===0)delete log[ex];const all=loadLog();all[todayKey()]=log;saveLog(all)}else{const input=prompt('Сколько повторов сделано?',MOCK_PLAN[ex].sets[set].targetReps);const val=+input;if(!isNaN(val)&&val>=0)setSetDone(ex,set,val)}render()})})}function updateSyncStatus(){const log=getTodayLog();const total=MOCK_PLAN.reduce((s,ex)=>s+ex.sets.length,0);const done=Object.values(log).reduce((s,ex)=>s+Object.keys(ex).length,0);$('#syncStatus').textContent=done>0?`🟢 Локально (${done}/${total})`:'🟡 Пусто'}function syncAll(){const p={user_id:TRAINER_ID,date:todayKey(),log:getTodayLog()};console.log('📤 SYNC PAYLOAD →',JSON.stringify(p,null,2));alert('Синхронизация (мок):\n'+JSON.stringify(p,null,2));$('#syncStatus').textContent='🟢 Отправлено (мок)';setTimeout(updateSyncStatus,1500)}document.addEventListener('DOMContentLoaded',()=>{if(window.Telegram?.WebApp){Telegram.WebApp.ready();Telegram.WebApp.expand()}render()});
+a/Спорт Дневник\app.js → b/Спорт Дневник\app.js
+@@ -0,0 +1,400 @@
++// ===========================
++// СПОРТ ДНЕВНИК — WebApp v0.2
++// Реальный бэкенд: Google Apps Script
++// ===========================
++
++const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwyoi2BNSWJ1LNPa_LzkhLWJ_-grRfT_HjnKO1XHUR2X81JUsNhH0a6EahbpL-V__zC/exec';
++const STORAGE_KEY = 'workout_log_v1';
++const TRAINER_ID = 594920142;
++
++let currentUser = null;
++let todayPlan = [];
++let todayLogs = {};
++
++// --- УТИЛИТЫ ---
++const $ = (sel, ctx = document) => ctx.querySelector(sel);
++const $$ = (sel, ctx = document) => [...ctx.querySelectorAll(sel)];
++
++function todayKey() {
++  const d = new Date();
++  return d.toISOString().slice(0, 10); // YYYY-MM-DD
++}
++
++function dayNameRu(date = new Date()) {
++  const names = ['Воскресенье','Понедельник','Вторник','Среда','Четверг','Пятница','Суббота'];
++  return names[date.getDay()];
++}
++
++function loadLocalLog() {
++  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); }
++  catch { return {}; }
++}
++
++function saveLocalLog(log) {
++  localStorage.setItem(STORAGE_KEY, JSON.stringify(log));
++}
++
++function getTodayLocalLog() {
++  return loadLocalLog()[todayKey()] || {};
++}
++
++function setLocalSetDone(exerciseIdx, setIdx, reps) {
++  const log = loadLocalLog();
++  const key = todayKey();
++  if (!log[key]) log[key] = {};
++  if (!log[key][exerciseIdx]) log[key][exerciseIdx] = {};
++  log[key][exerciseIdx][setIdx] = { reps, at: Date.now() };
++  saveLocalLog(log);
++}
++
++// --- API ---
++async function apiGetPlan(userId) {
++  const url = `${APPS_SCRIPT_URL}?user_id=${userId}`;
++  const resp = await fetch(url);
++  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
++  return resp.json();
++}
++
++async function apiPostLog(payload) {
++  const resp = await fetch(APPS_SCRIPT_URL, {
++    method: 'POST',
++    headers: { 'Content-Type': 'application/json' },
++    body: JSON.stringify(payload)
++  });
++  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
++  return resp.json();
++}
++
++// --- ИНИТ ---
++async function init() {
++  // Telegram WebApp ready
++  if (window.Telegram?.WebApp) {
++    Telegram.WebApp.ready();
++    Telegram.WebApp.expand();
++    
++    // Получаем user_id из initData
++    const initData = Telegram.WebApp.initDataUnsafe?.user;
++    if (initData?.id) {
++      currentUser = initData.id;
+… omitted 322 diff line(s) across 1 additional file(s)/section(s)
