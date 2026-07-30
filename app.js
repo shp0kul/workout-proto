@@ -11,6 +11,9 @@ const CACHE_PREFIX = 'wd_cache_';
 const $ = (s, c = document) => c.querySelector(s);
 const $$ = (s, c = document) => [...c.querySelectorAll(s)];
 
+const WEEK_LABELS = { 1: 'Неделя 1', 2: 'Неделя 2', 3: 'Неделя 3', 4: 'Разгрузка' };
+const EX_LIST = ['Приседания', 'Жим стоя', 'Жим лёжа', 'Становая тяга'];
+
 // Безопасный localStorage (Safari в приватном режиме кидает исключение на любое обращение)
 const safeLS = {
   get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
