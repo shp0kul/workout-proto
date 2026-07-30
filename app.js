@@ -102,7 +102,7 @@ function buildUserTabs() {
       currentUser = u.id;
       safeLS.set(LAST_USER_KEY, currentUser);
       maxesCache = null; basesCache = null; appliedBases = null; dataLoaded = false;
-      isAdmin = (u.name === 'Игорь') || isAdmin;
+      // isAdmin привязан к ТВОЕМУ telegram id (устанавливается в init, не сбрасывается при смене вкладки)
       buildUserTabs();
       renderFromCache();
       await loadBatch();
@@ -244,7 +244,8 @@ function render() {
   state.plan.forEach(s => {
     const key = lk(s);
     allPlansByKey[key] = s;
-    const editable = (key === editableKey);
+    // админ может редактировать ЛЮБОЙ подход; обычный юзер — только последний рабочий
+    const editable = isAdmin ? true : (key === editableKey);
     const saved = local[key];
     const row = document.createElement('div');
     row.className = 'set-row ' + (editable ? 'editable' : 'readonly') + (saved ? ' completed' : '');
@@ -418,7 +419,7 @@ async function loadWodArch() {
   const cont = $('#exerciseList');
   cont.innerHTML = '<div class="empty">⏳ загрузка…</div>';
   try { const data = await apiGet({ wods: '1' }); renderWodArch(data.wods || [], cont); }
-  catch (e) { console.error(e); cont.innerHTML = '<div class="empty">Ошибка загрузки</div>'; }
+  catch (e) { console.error(e); showError('Архив WOD: ' + (e.message || e)); cont.innerHTML = '<div class="empty">Ошибка загрузки — см. детали ниже</div>'; }
 }
 
 function renderWodArch(wods, cont) {
