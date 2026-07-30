@@ -15,6 +15,7 @@ const $$ = (s, c = document) => [...c.querySelectorAll(s)];
 
 const WEEK_LABELS = { 1: 'Неделя 1', 2: 'Неделя 2', 3: 'Неделя 3', 4: 'Разгрузка' };
 const EX_LIST = ['Приседания', 'Жим стоя', 'Жим лёжа', 'Становая тяга'];
+const EX_SHORT = { 'Приседания': 'Присед', 'Жим стоя': 'Жим стоя', 'Жим лёжа': 'Жим лёжа', 'Становая тяга': 'Тяга' };
 
 // Безопасный localStorage (Safari в приватном режиме кидает исключение на любое обращение)
 const safeLS = {
@@ -282,17 +283,16 @@ function renderMax() {
   table.className = 'max-table';
   const head = document.createElement('div');
   head.className = 'max-row max-head';
-  head.innerHTML = '<div class="max-ex">Максимумы</div><div class="max-cell">База</div>' + wkOrder.map(w => `<div class="max-cell">${wkLabel[w]}</div>`).join('');
+  head.innerHTML = '<div class="max-ex"></div><div class="max-cell">База</div>' + wkOrder.map(w => `<div class="max-cell">${wkLabel[w]}</div>`).join('');
   table.appendChild(head);
   maxesCache.forEach(row => {
     const r = document.createElement('div');
     r.className = 'max-row';
     const baseVal = basesCache ? basesCache[row.exercise] : row.base;
     const appliedVal = appliedBases ? appliedBases[row.exercise] : baseVal;
-    let cells = `<div class="max-ex">${row.exercise}</div>`;
+    let cells = `<div class="max-ex">${EX_SHORT[row.exercise] || row.exercise}</div>`;
     cells += `<div class="max-cell">
-      <input type="number" class="base-input" data-ex="${row.exercise}" value="${baseVal != null ? baseVal : ''}" placeholder="кг">
-      <span class="base-applied">применено: ${appliedVal != null ? appliedVal : '—'} кг</span></div>`;
+      <input type="number" class="base-input" data-ex="${row.exercise}" value="${baseVal != null ? baseVal : ''}" placeholder="кг"></div>`;
     wkOrder.forEach(w => {
       const d = row.weeks[w] || {};
       const wTxt = d.weight != null ? d.weight : '—';
