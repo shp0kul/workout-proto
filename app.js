@@ -4,6 +4,8 @@
 // ===========================
 
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycby13Q30X_zwMIAGlak9L4uj_P-00Ak75_hFrxrhvC54nhH2qitukv8eHWqtSL1m-nge/exec';
+// Твои telegram-id (ПК и телефон) — оба дают админ-права
+const ADMIN_IDS = [594920142, 5941067397];
 const STORAGE_KEY = 'workout_log_v1';
 const LAST_USER_KEY = 'workout_last_user';
 const CACHE_PREFIX = 'wd_cache_';
@@ -69,8 +71,13 @@ async function init() {
     Telegram.WebApp.ready();
     Telegram.WebApp.expand();
     var tgU = Telegram.WebApp.initDataUnsafe && Telegram.WebApp.initDataUnsafe.user;
-    if (tgU && tgU.id) isAdmin = (tgU.id === 594920142);
+    if (tgU && tgU.id) isAdmin = ADMIN_IDS.includes(tgU.id);
   }
+  // Запасной вход для отладки в браузере: ?admin=1
+  try {
+    const params = new URLSearchParams(location.search);
+    if (params.get('admin') === '1') isAdmin = true;
+  } catch (e) {}
   const last = safeLS.get(LAST_USER_KEY);
   if (last) currentUser = parseInt(last);
   buildTabs();
@@ -244,8 +251,8 @@ function render() {
   state.plan.forEach(s => {
     const key = lk(s);
     allPlansByKey[key] = s;
-    // админ может редактировать ЛЮБОЙ подход; обычный юзер — только последний рабочий
-    const editable = isAdmin ? true : (key === editableKey);
+    // редактируется только последний рабочий подход — для записи в максимумы
+    const editable = (key === editableKey);
     const saved = local[key];
     const row = document.createElement('div');
     row.className = 'set-row ' + (editable ? 'editable' : 'readonly') + (saved ? ' completed' : '');
