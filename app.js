@@ -292,7 +292,8 @@ function renderMax() {
     const appliedVal = appliedBases ? appliedBases[row.exercise] : baseVal;
     let cells = `<div class="max-ex">${EX_SHORT[row.exercise] || row.exercise}</div>`;
     cells += `<div class="max-cell">
-      <input type="number" class="base-input" data-ex="${row.exercise}" value="${baseVal != null ? baseVal : ''}" placeholder="кг"></div>`;
+      <input type="number" class="base-input" data-ex="${row.exercise}" value="${baseVal != null ? baseVal : ''}" placeholder="кг">
+      <span class="base-applied">${appliedVal != null ? appliedVal : '—'} кг</span></div>`;
     wkOrder.forEach(w => {
       const d = row.weeks[w] || {};
       const wTxt = d.weight != null ? d.weight : '—';
