@@ -13,17 +13,20 @@
     <header class="header">
       <h1>🏋️ Спорт Дневник</h1>
       <div class="day-badge" id="dayBadge">Понедельник</div>
+      <div class="selectors">
+        <select id="weekSelect" class="selector"></select>
+        <select id="exSelect" class="selector"></select>
+      </div>
     </header>
     <main class="main">
       <section class="workout-card" id="workoutCard">
         <div class="exercise-group" id="exerciseList"></div>
       </section>
       <div class="status-bar" id="statusBar">
-        <span id="syncStatus">🟢 Локально</span>
-        <button class="btn-sync" id="btnSync" onclick="syncAll()">☁️ Синхронизировать</button>
+        <span id="syncStatus">🟡 Пусто</span>
       </div>
     </main>
-    <footer class="footer"><small>Прототип v0.1 • Данные в localStorage</small></footer>
+    <footer class="footer"><small>Спорт Дневник v0.5 • выбор сверху = схема</small></footer>
   </div>
   <script src="app.js"></script>
 </body>
