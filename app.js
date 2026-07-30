@@ -23,8 +23,14 @@ async function apiGet(userId, date) {
   if (!r.ok) throw new Error('HTTP ' + r.status);
   return r.json();
 }
+// ВАЖНО: Content-Type 'text/plain' (простой запрос) — иначе браузер шлёт OPTIONS preflight,
+// который Apps Script не обрабатывает и запрос падает по CORS.
 async function apiPost(payload) {
-  const r = await fetch(APPS_SCRIPT_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+  const r = await fetch(APPS_SCRIPT_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(payload)
+  });
   if (!r.ok) throw new Error('HTTP ' + r.status);
   return r.json();
 }
