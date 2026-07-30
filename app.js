@@ -1,6 +1,6 @@
 // ===========================
-// СПОРТ ДНЕВНИК — WebApp v0.9
-// Мульти-пользователь: вкладки имён + добавление
+// СПОРТ ДНЕВНИК — WebApp v1.1
+// Цикл без привязки к датам. WOD с ред/удал.
 // ===========================
 
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycby13Q30X_zwMIAGlak9L4uj_P-00Ak75_hFrxrhvC54nhH2qitukv8eHWqtSL1m-nge/exec';
@@ -13,17 +13,14 @@ const $$ = (s, c = document) => [...c.querySelectorAll(s)];
 const WEEK_LABELS = { 1: 'Неделя 1', 2: 'Неделя 2', 3: 'Неделя 3', 4: 'Разгрузка' };
 const EX_LIST = ['Приседания', 'Жим стоя', 'Жим лёжа', 'Становая тяга'];
 
-function todayKey() { return new Date().toISOString().slice(0, 10); }
-function dayNameRu(d = new Date()) { return ['Воскресенье','Понедельник','Вторник','Среда','Четверг','Пятница','Суббота'][d.getDay()]; }
-
 function loadLocal() { try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); } catch { return {}; } }
 function saveLocal(d) { localStorage.setItem(STORAGE_KEY, JSON.stringify(d)); }
-function lk(dateStr, item) { return `${dateStr}|${item.exercise}|${item.setNum}|${item.setType}`; }
-function getStoredFor(dateStr) { return loadLocal()[dateStr] || {}; }
-function setStored(dateStr, key, reps) {
+function lk(item) { return `${item.week}|${item.exercise}|${item.setNum}|${item.setType}`; }
+function getStored() { return loadLocal().cycle || {}; }
+function setStored(key, reps) {
   const l = loadLocal();
-  if (!l[dateStr]) l[dateStr] = {};
-  l[dateStr][key] = { reps, at: Date.now() };
+  if (!l.cycle) l.cycle = {};
+  l.cycle[key] = { reps, at: Date.now() };
   saveLocal(l);
 }
 
@@ -46,22 +43,23 @@ async function apiPost(payload) {
 let currentUser = null;
 let tab = 'strength';
 let usersList = [];
-let state = { week: null, exercise: null, plan: [], schemeDate: null, isToday: false };
+let state = { week: 1, exercise: EX_LIST[0], plan: [] };
 let allPlansByKey = {};
 let maxesCache = null;
 let basesCache = null;
 let appliedBases = null;
 let saveTimers = {};
 let isAdmin = false;
+let currentWod = null;       // актуальный WOD (для редактирования)
+let editWodMode = false;     // режим редактирования формы
 
 async function init() {
   if (window.Telegram?.WebApp) {
     Telegram.WebApp.ready();
     Telegram.WebApp.expand();
-  }
-  // Определяем права админа: либо по Telegram ID, либо если активна вкладка "Игорь" (локальная отладка)
-  if (window.Telegram?.WebApp?.initDataUnsafe?.user?.id) {
-    isAdmin = (window.Telegram.WebApp.initDataUnsafe.user.id === 594920142);
+    if (Telegram.WebApp.initDataUnsafe?.user?.id) {
+      isAdmin = (Telegram.WebApp.initDataUnsafe.user.id === 594920142);
+    }
   }
   await loadUsers();
 }
@@ -72,7 +70,6 @@ async function loadUsers() {
   try {
     const data = await apiGet({ users: '1' });
     usersList = data.users || [];
-    // Если текущего юзера нет в списке — берём первого
     if (!usersList.find(u => u.id == currentUser)) currentUser = usersList[0]?.id || currentUser;
   } catch (e) {
     console.error('Users load error', e);
@@ -81,7 +78,8 @@ async function loadUsers() {
   buildUserTabs();
   buildTabs();
   buildSelectors();
-  await loadToday();
+  await loadScheme(state.week, state.exercise);
+  render();
 }
 
 function buildUserTabs() {
@@ -96,20 +94,18 @@ function buildUserTabs() {
       currentUser = u.id;
       localStorage.setItem(LAST_USER_KEY, currentUser);
       maxesCache = null; basesCache = null; appliedBases = null;
-      // Админ если это вкладка Игорь (локальная отладка)
       isAdmin = (u.name === 'Игорь') || isAdmin;
       buildUserTabs();
-      await loadToday();
+      await loadScheme(state.week, state.exercise);
+      render();
     };
     bar.appendChild(t);
   });
-  // Кнопка добавить
   const add = document.createElement('button');
   add.className = 'utab utab-add';
   add.textContent = '+';
   add.onclick = addUser;
   bar.appendChild(add);
-  // Кнопка удалить (только админ, скрыта для первого/единственного)
   if (isAdmin && usersList.length > 1) {
     const del = document.createElement('button');
     del.className = 'utab utab-del';
@@ -130,11 +126,10 @@ async function deleteCurrentUser() {
     currentUser = usersList[0]?.id;
     maxesCache = null; basesCache = null; appliedBases = null;
     buildUserTabs();
-    await loadToday();
+    await loadScheme(state.week, state.exercise);
+    render();
     flashSync('🗑 Удалён: ' + u.name);
-  } catch (e) {
-    console.error(e); flashSync('🟡 Ошибка удаления');
-  }
+  } catch (e) { console.error(e); flashSync('🟡 Ошибка удаления'); }
 }
 
 async function addUser() {
@@ -147,47 +142,19 @@ async function addUser() {
       currentUser = res.user.id;
       maxesCache = null; basesCache = null; appliedBases = null;
       buildUserTabs();
-      await loadToday();
-      flashSync('✅ Добавлен: ' + res.user.name);
-    }
-  } catch (e) {
-    console.error(e);
-    flashSync('🟡 Ошибка добавления');
-  }
-}
-
-async function loadToday() {
-  const date = todayKey();
-  try {
-    const data = await apiGet({ user_id: currentUser, date });
-    const plan = data.plan || [];
-    if (plan.length) {
-      state.week = plan[0].week;
-      state.exercise = plan[0].exercise;
-      state.plan = plan;
-      state.schemeDate = date;
-      state.isToday = true;
-    } else {
-      state.week = 1;
-      state.exercise = EX_LIST[0];
-      state.isToday = false;
       await loadScheme(state.week, state.exercise);
       render();
-      return;
+      flashSync('✅ Добавлен: ' + res.user.name);
     }
-  } catch (e) {
-    console.error('Load error', e);
-    state.week = 1; state.exercise = EX_LIST[0]; state.isToday = false;
-  }
-  render();
+  } catch (e) { console.error(e); flashSync('🟡 Ошибка добавления'); }
 }
 
 async function loadScheme(week, exercise) {
+  state.week = week;
+  state.exercise = exercise;
   try {
     const data = await apiGet({ user_id: currentUser, week, exercise });
     state.plan = data.plan || [];
-    state.schemeDate = data.schemeDate || null;
-    state.isToday = (data.schemeDate === todayKey());
   } catch (e) {
     console.error('Scheme load error', e);
     state.plan = [];
@@ -199,18 +166,13 @@ function buildTabs() {
     t.onclick = () => {
       tab = t.dataset.tab;
       $$('.tab').forEach(x => x.classList.toggle('active', x.dataset.tab === tab));
-      // Селекторы недель/упражнений только для Силовой
       $('#selectors').style.display = (tab === 'strength') ? 'flex' : 'none';
-      if (tab === 'strength') loadTodayJustRender();
+      if (tab === 'strength') { loadScheme(state.week, state.exercise).then(render); }
       else if (tab === 'max') loadMax();
       else if (tab === 'wod') loadWod();
       else if (tab === 'wodarch') loadWodArch();
     };
   });
-}
-
-async function loadTodayJustRender() {
-  await loadToday();
 }
 
 function buildSelectors() {
@@ -232,22 +194,16 @@ function buildSelectors() {
 }
 
 async function onSelect() {
-  state.week = parseInt($('#weekSelect').value);
-  state.exercise = $('#exSelect').value;
-  await loadScheme(state.week, state.exercise);
+  await loadScheme(parseInt($('#weekSelect').value), $('#exSelect').value);
   render();
 }
 
 function targetText(t) { return typeof t === 'string' ? t : (t + ' повторов'); }
 
 function render() {
-  $('#dayBadge').textContent = state.isToday ? dayNameRu() + ' • сегодня' : (WEEK_LABELS[state.week] || '');
+  $('#dayBadge').textContent = WEEK_LABELS[state.week] + ' • ' + state.exercise;
 
-  if (tab === 'max') {
-    $('#selectors').style.display = 'none';
-    renderMax();
-    return;
-  }
+  if (tab === 'max') { $('#selectors').style.display = 'none'; renderMax(); return; }
 
   $('#selectors').style.display = 'flex';
   $('#weekSelect').value = state.week;
@@ -255,7 +211,7 @@ function render() {
 
   const cont = $('#exerciseList');
   cont.innerHTML = '';
-  const local = getStoredFor(state.schemeDate);
+  const local = getStored();
   allPlansByKey = {};
 
   if (state.plan.length === 0) {
@@ -266,7 +222,7 @@ function render() {
 
   const works = state.plan.filter(s => s.setType === 'work');
   const lastWork = works[works.length - 1];
-  const editableKey = lastWork ? lk(state.schemeDate, lastWork) : null;
+  const editableKey = lastWork ? lk(lastWork) : null;
 
   const g = document.createElement('div');
   g.className = 'exercise-group';
@@ -276,24 +232,20 @@ function render() {
   g.appendChild(h);
 
   state.plan.forEach(s => {
-    const key = lk(state.schemeDate, s);
+    const key = lk(s);
     allPlansByKey[key] = s;
     const editable = (key === editableKey);
     const saved = local[key];
-
     const row = document.createElement('div');
     row.className = 'set-row ' + (editable ? 'editable' : 'readonly') + (saved ? ' completed' : '');
-
     const left = `
       <div class="set-info">
         <span class="set-label">${s.setType === 'warmup' ? 'Разминка' : 'Рабочий'} ${s.setNum}</span>
         <span class="set-weight">${s.weight} кг</span>
         <span class="set-target">цель: ${targetText(s.targetReps)}</span>
       </div>`;
-
     if (editable) {
-      row.innerHTML = left + `
-        <input type="number" class="set-reps-input" placeholder="повторы" min="0" max="99" data-key="${key}" ${saved ? 'value="' + saved.reps + '"' : ''}>`;
+      row.innerHTML = left + `<input type="number" class="set-reps-input" placeholder="повторы" min="0" max="99" data-key="${key}" ${saved ? 'value="' + saved.reps + '"' : ''}>`;
     } else {
       row.innerHTML = left + `<div class="set-plan">${targetText(s.targetReps)}</div>`;
     }
@@ -303,7 +255,6 @@ function render() {
 
   bindEvents();
   updateSyncStatus();
-  if (!state.isToday) flashSync('👁 Другой день — можно внести');
 }
 
 async function loadMax() {
@@ -326,22 +277,15 @@ function targetNum(t) {
 function renderMax() {
   const cont = $('#exerciseList');
   cont.innerHTML = '';
-  if (!maxesCache || !maxesCache.length) {
-    cont.innerHTML = '<div class="empty">Записей пока нет 💤</div>';
-    return;
-  }
+  if (!maxesCache || !maxesCache.length) { cont.innerHTML = '<div class="empty">Записей пока нет 💤</div>'; return; }
   const wkOrder = [1, 2, 3];
   const wkLabel = { 1: 'Нед 1', 2: 'Нед 2', 3: 'Нед 3' };
-
   const table = document.createElement('div');
   table.className = 'max-table';
-
   const head = document.createElement('div');
   head.className = 'max-row max-head';
-  head.innerHTML = '<div class="max-ex">Максимумы</div><div class="max-cell">База</div>' +
-    wkOrder.map(w => `<div class="max-cell">${wkLabel[w]}</div>`).join('');
+  head.innerHTML = '<div class="max-ex">Максимумы</div><div class="max-cell">База</div>' + wkOrder.map(w => `<div class="max-cell">${wkLabel[w]}</div>`).join('');
   table.appendChild(head);
-
   maxesCache.forEach(row => {
     const r = document.createElement('div');
     r.className = 'max-row';
@@ -358,9 +302,7 @@ function renderMax() {
       const aTxt = d.actual != null ? d.actual : '';
       const tNum = targetNum(d.target);
       let cls = '';
-      if (aTxt !== '' && aTxt !== null && aTxt !== undefined) {
-        cls = (Number(aTxt) >= tNum) ? 'ok' : 'bad';
-      }
+      if (aTxt !== '' && aTxt !== null && aTxt !== undefined) cls = (Number(aTxt) >= tNum) ? 'ok' : 'bad';
       const repTxt = aTxt !== '' && aTxt != null ? `${aTxt} <span class="max-tgt">/ ${d.target}</span>` : (d.target || '');
       cells += `<div class="max-cell ${cls}">
         <span class="max-w">${wTxt} кг</span>
@@ -370,12 +312,10 @@ function renderMax() {
     r.innerHTML = cells;
     table.appendChild(r);
   });
-
   const recalcWrap = document.createElement('div');
   recalcWrap.className = 'recalc-wrap';
   recalcWrap.innerHTML = `<button class="recalc-btn" id="recalcBtn">🔄 Перерасчёт весов</button>`;
   table.appendChild(recalcWrap);
-
   cont.appendChild(table);
   bindMaxEvents();
 }
@@ -383,34 +323,24 @@ function renderMax() {
 function bindMaxEvents() {
   $('#recalcBtn').onclick = doRecalc;
   $$('.base-input').forEach(inp => {
-    inp.onchange = () => {
-      if (!basesCache) basesCache = {};
-      basesCache[inp.dataset.ex] = +inp.value;
-    };
+    inp.onchange = () => { if (!basesCache) basesCache = {}; basesCache[inp.dataset.ex] = +inp.value; };
   });
 }
 
 async function doRecalc() {
   const btn = $('#recalcBtn');
-  btn.disabled = true;
-  btn.textContent = '⏳ Считаем…';
+  btn.disabled = true; btn.textContent = '⏳ Считаем…';
   try {
     const b = await apiPost({
       action: 'recalc', user_id: currentUser,
       ohp: basesCache['Жим стоя'], dl: basesCache['Становая тяга'],
       bench: basesCache['Жим лёжа'], squat: basesCache['Приседания']
     });
-    maxesCache = null;
-    appliedBases = b.bases;
+    maxesCache = null; appliedBases = b.bases;
     await loadMax();
     flashSync('✅ Перерасчёт готов');
-  } catch (e) {
-    console.error(e);
-    flashSync('🟡 Ошибка перерасчёта');
-  } finally {
-    btn.disabled = false;
-    btn.textContent = '🔄 Перерасчёт весов';
-  }
+  } catch (e) { console.error(e); flashSync('🟡 Ошибка перерасчёта'); }
+  finally { btn.disabled = false; btn.textContent = '🔄 Перерасчёт весов'; }
 }
 
 function bindEvents() {
@@ -425,51 +355,44 @@ function bindEvents() {
 }
 
 async function saveSet(key, reps) {
-  setStored(state.schemeDate, key, reps);
+  setStored(key, reps);
   const s = allPlansByKey[key];
   if (!s) return;
   clearTimeout(saveTimers[key]);
   saveTimers[key] = setTimeout(async () => {
     try {
       await apiPost({
-        user_id: currentUser, date: state.schemeDate,
-        week: s.week, day: s.day, exercise: s.exercise,
-        set_num: s.setNum, set_type: s.setType,
-        weight: s.weight, target_reps: s.targetReps, actual_reps: reps
+        user_id: currentUser, week: s.week, day: s.day, exercise: s.exercise,
+        set_num: s.setNum, set_type: s.setType, weight: s.weight, target_reps: s.targetReps, actual_reps: reps
       });
       flashSync('🟢 Сохранено ' + reps);
-    } catch (e) {
-      console.warn('Sync failed', e);
-      flashSync('🟡 Локально (нет сети)');
-    }
+    } catch (e) { console.warn('Sync failed', e); flashSync('🟡 Локально (нет сети)'); }
   }, 600);
 }
 
+// ---------- WOD ----------
 async function loadWod() {
   const cont = $('#exerciseList');
+  $('#dayBadge').textContent = '🔥 WOD';
   cont.innerHTML = '<div class="empty">⏳ загрузка…</div>';
   try {
     const data = await apiGet({ wod: 'today' });
-    if (!data.wod) {
-      cont.innerHTML = '<div class="empty">Пока нет актуального WOD 💤</div>';
-      if (isAdmin) renderWodAdmin(cont);
-      return;
-    }
-    renderWod(data.wod, cont);
-  } catch (e) {
-    console.error(e);
-    cont.innerHTML = '<div class="empty">Ошибка загрузки</div>';
-  }
+    currentWod = data.wod || null;
+    renderWod();
+  } catch (e) { console.error(e); cont.innerHTML = '<div class="empty">Ошибка загрузки</div>'; }
 }
 
-function renderWod(wod, cont) {
+function renderWod() {
+  const cont = $('#exerciseList');
   cont.innerHTML = '';
+  if (!currentWod) {
+    cont.innerHTML = '<div class="empty">Пока нет актуального WOD 💤</div>';
+    if (isAdmin) renderWodAdmin(cont);
+    return;
+  }
   const card = document.createElement('div');
   card.className = 'wod-card';
-  card.innerHTML = `
-    <div class="wod-date">${wod.date}</div>
-    <h2 class="wod-title">${escapeHtml(wod.name)}</h2>
-    <div class="wod-text">${escapeHtml(wod.text).replace(/\n/g, '<br>')}</div>`;
+  card.innerHTML = `<div class="wod-date">${currentWod.date}</div><h2 class="wod-title">${escapeHtml(currentWod.name)}</h2><div class="wod-text">${escapeHtml(currentWod.text).replace(/\n/g, '<br>')}</div>`;
   cont.appendChild(card);
   if (isAdmin) renderWodAdmin(cont);
 }
@@ -477,26 +400,48 @@ function renderWod(wod, cont) {
 function renderWodAdmin(cont) {
   const wrap = document.createElement('div');
   wrap.className = 'wod-admin';
+  const editing = editWodMode && currentWod;
   wrap.innerHTML = `
-    <details>
-      <summary>➕ Добавить WOD (админ)</summary>
+    <details ${editing ? 'open' : ''}>
+      <summary>${editing ? '✏️ Редактировать WOD' : '➕ Добавить WOD (админ)'}</summary>
       <div class="wod-form">
-        <input type="text" id="wodName" placeholder="Название" class="wod-input">
-        <textarea id="wodText" placeholder="Описание комплекса" class="wod-textarea" rows="5"></textarea>
-        <button id="wodAdd" class="recalc-btn">Сохранить WOD</button>
+        <input type="text" id="wodName" placeholder="Название" class="wod-input" value="${editing ? escapeHtml(currentWod.name) : ''}">
+        <textarea id="wodText" placeholder="Описание комплекса" class="wod-textarea" rows="5">${editing ? escapeHtml(currentWod.text) : ''}</textarea>
+        <button id="wodSave" class="recalc-btn">${editing ? 'Сохранить изменения' : 'Сохранить WOD'}</button>
+        ${editing ? '<button id="wodCancel" class="utab">Отмена</button>' : ''}
       </div>
     </details>`;
   cont.appendChild(wrap);
-  wrap.querySelector('#wodAdd').onclick = async () => {
+  if (!editing && currentWod) {
+    const actions = document.createElement('div');
+    actions.className = 'wod-actions';
+    actions.innerHTML = `<button id="wodEdit" class="utab">✏️ Редактировать</button><button id="wodDel" class="utab utab-del">🗑 Удалить</button>`;
+    cont.appendChild(actions);
+    actions.querySelector('#wodEdit').onclick = () => { editWodMode = true; renderWod(); };
+    actions.querySelector('#wodDel').onclick = async () => {
+      if (!confirm('Удалить WOD «' + currentWod.name + '»?')) return;
+      await apiPost({ action: 'delete_wod', viewer_id: 594920142, id: currentWod.id });
+      flashSync('🗑 WOD удалён'); editWodMode = false; await loadWod();
+    };
+  }
+  wrap.querySelector('#wodSave').onclick = async () => {
     const name = wrap.querySelector('#wodName').value.trim();
     const text = wrap.querySelector('#wodText').value.trim();
     if (!name) { alert('Введите название'); return; }
     try {
-      await apiPost({ action: 'add_wod', viewer_id: 594920142, name, text });
-      flashSync('✅ WOD добавлен');
+      if (editing) {
+        await apiPost({ action: 'edit_wod', viewer_id: 594920142, id: currentWod.id, name, text });
+        flashSync('✅ WOD обновлён');
+      } else {
+        await apiPost({ action: 'add_wod', viewer_id: 594920142, name, text });
+        flashSync('✅ WOD добавлен');
+      }
+      editWodMode = false;
       await loadWod();
     } catch (e) { console.error(e); flashSync('🟡 Ошибка'); }
   };
+  const cancel = wrap.querySelector('#wodCancel');
+  if (cancel) cancel.onclick = () => { editWodMode = false; renderWod(); };
 }
 
 async function loadWodArch() {
@@ -505,10 +450,7 @@ async function loadWodArch() {
   try {
     const data = await apiGet({ wods: '1' });
     renderWodArch(data.wods || [], cont);
-  } catch (e) {
-    console.error(e);
-    cont.innerHTML = '<div class="empty">Ошибка загрузки</div>';
-  }
+  } catch (e) { console.error(e); cont.innerHTML = '<div class="empty">Ошибка загрузки</div>'; }
 }
 
 function renderWodArch(wods, cont) {
@@ -550,10 +492,9 @@ function flashSync(text) {
 }
 
 function updateSyncStatus() {
-  const l = getStoredFor(state.schemeDate);
-  $('#syncStatus').textContent = Object.keys(l).length > 0
-    ? `🟢 ${state.schemeDate}: ${Object.keys(l).length} запись`
-    : '🟡 Пусто';
+  const l = getStored();
+  const n = Object.keys(l).length;
+  $('#syncStatus').textContent = n > 0 ? `🟢 ${n} запись в цикле` : '🟡 Пусто';
 }
 
 document.addEventListener('DOMContentLoaded', init);
