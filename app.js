@@ -310,8 +310,11 @@ function renderMax() {
   const recalcWrap = document.createElement('div');
   recalcWrap.className = 'recalc-wrap';
   recalcWrap.innerHTML = `<button class="recalc-btn" id="recalcBtn">🔄 Перерасчёт весов</button>`;
-  table.appendChild(recalcWrap);
-  cont.appendChild(table);
+  const scroll = document.createElement('div');
+  scroll.className = 'max-table-scroll';
+  scroll.appendChild(table);
+  scroll.appendChild(recalcWrap);
+  cont.appendChild(scroll);
   bindMaxEvents();
 }
 
