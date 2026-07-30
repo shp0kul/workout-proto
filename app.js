@@ -11,11 +11,14 @@ const CACHE_PREFIX = 'wd_cache_';
 const $ = (s, c = document) => c.querySelector(s);
 const $$ = (s, c = document) => [...c.querySelectorAll(s)];
 
-const WEEK_LABELS = { 1: 'Неделя 1', 2: 'Неделя 2', 3: 'Неделя 3', 4: 'Разгрузка' };
-const EX_LIST = ['Приседания', 'Жим стоя', 'Жим лёжа', 'Становая тяга'];
+// Безопасный localStorage (Safari в приватном режиме кидает исключение на любое обращение)
+const safeLS = {
+  get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); return true; } catch (e) { return false; } }
+};
 
-function loadLocal() { try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); } catch { return {}; } }
-function saveLocal(d) { localStorage.setItem(STORAGE_KEY, JSON.stringify(d)); }
+function loadLocal() { try { return JSON.parse(safeLS.get(STORAGE_KEY) || '{}'); } catch { return {}; } }
+function saveLocal(d) { safeLS.set(STORAGE_KEY, JSON.stringify(d)); }
 function lk(item) { return `${item.week}|${item.exercise}|${item.setNum}|${item.setType}`; }
 function getStored() { return loadLocal().cycle || {}; }
 function setStored(key, reps) {
@@ -25,8 +28,8 @@ function setStored(key, reps) {
   saveLocal(l);
 }
 function cacheKey(uid) { return CACHE_PREFIX + uid; }
-function getCache(uid) { try { return JSON.parse(localStorage.getItem(cacheKey(uid)) || 'null'); } catch { return null; } }
-function setCache(uid, data) { localStorage.setItem(cacheKey(uid), JSON.stringify(data)); }
+function getCache(uid) { try { return JSON.parse(safeLS.get(cacheKey(uid)) || 'null'); } catch { return null; } }
+function setCache(uid, data) { safeLS.set(cacheKey(uid), JSON.stringify(data)); }
 
 async function apiGet(params) {
   const q = new URLSearchParams(params).toString();
@@ -59,12 +62,13 @@ let editWodMode = false;
 let dataLoaded = false;
 
 async function init() {
-  if (window.Telegram?.WebApp) {
+  if (window.Telegram && window.Telegram.WebApp) {
     Telegram.WebApp.ready();
     Telegram.WebApp.expand();
-    if (Telegram.WebApp.initDataUnsafe?.user?.id) isAdmin = (Telegram.WebApp.initDataUnsafe.user.id === 594920142);
+    var tgU = Telegram.WebApp.initDataUnsafe && Telegram.WebApp.initDataUnsafe.user;
+    if (tgU && tgU.id) isAdmin = (tgU.id === 594920142);
   }
-  const last = localStorage.getItem(LAST_USER_KEY);
+  const last = safeLS.get(LAST_USER_KEY);
   if (last) currentUser = parseInt(last);
   buildTabs();
   buildSelectors();
@@ -79,7 +83,7 @@ async function loadUsers() {
   try {
     const data = await apiGet({ users: '1' });
     usersList = data.users || [];
-    if (!usersList.find(u => u.id == currentUser)) currentUser = usersList[0]?.id || currentUser;
+    if (!usersList.find(u => u.id == currentUser)) currentUser = (usersList[0] && usersList[0].id) || currentUser;
   } catch (e) { console.error('Users load error', e); usersList = [{ id: currentUser, name: 'Игорь' }]; }
   buildUserTabs();
 }
@@ -93,7 +97,7 @@ function buildUserTabs() {
     t.textContent = u.name; t.dataset.uid = u.id;
     t.onclick = async () => {
       currentUser = u.id;
-      localStorage.setItem(LAST_USER_KEY, currentUser);
+      safeLS.set(LAST_USER_KEY, currentUser);
       maxesCache = null; basesCache = null; appliedBases = null; dataLoaded = false;
       isAdmin = (u.name === 'Игорь') || isAdmin;
       buildUserTabs();
@@ -120,7 +124,7 @@ async function deleteCurrentUser() {
   try {
     await apiPost({ action: 'delete_user', viewer_id: 594920142, user_id: currentUser });
     usersList = usersList.filter(x => x.id != currentUser);
-    currentUser = usersList[0]?.id;
+    currentUser = usersList[0] && usersList[0].id;
     maxesCache = null; basesCache = null; appliedBases = null; dataLoaded = false;
     buildUserTabs();
     renderFromCache();
@@ -441,6 +445,25 @@ function renderWodArch(wods, cont) {
 function escapeHtml(s) {
   return String(s || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
+
+// Видимая ошибка на экране (для диагностики на iPhone, где консоль недоступна)
+function showError(msg) {
+  let el = $('#errBox');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'errBox';
+    el.style.cssText = 'position:fixed;left:8px;right:8px;bottom:8px;background:#3a0d0d;color:#ff9b9b;border:1px solid #ff6b6b;border-radius:8px;padding:10px;font-size:13px;z-index:9999;white-space:pre-wrap;max-height:40vh;overflow:auto;';
+    document.body.appendChild(el);
+  }
+  el.textContent = '⚠️ Ошибка: ' + msg;
+}
+
+window.addEventListener('error', e => {
+  showError((e.error && e.error.stack) ? e.error.stack : (e.message || 'неизвестно'));
+});
+window.addEventListener('unhandledrejection', e => {
+  showError('Promise: ' + ((e.reason && e.reason.message) ? e.reason.message : e.reason));
+});
 
 function flashSync(text) {
   const el = $('#syncStatus');
