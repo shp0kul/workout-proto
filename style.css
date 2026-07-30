@@ -5,7 +5,7 @@
 .selector:focus{border-color:var(--accent)}
 .selector:hover{border-color:var(--accent)}
 .tabs{display:flex;gap:8px;margin-top:12px;justify-content:center;flex-wrap:wrap}
-.tab{flex:1;min-width:0;min-height:44px;max-width:180px;padding:9px 14px;background:var(--card);color:var(--text-dim);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:.85rem;font-weight:600;cursor:pointer;outline:none;transition:all .15s}
+.tab{flex:1;min-width:0;min-height:44px;max-width:180px;padding:9px 10px;background:var(--card);color:var(--text-dim);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:.82rem;font-weight:600;cursor:pointer;outline:none;transition:all .15s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tab.active{background:var(--accent);color:var(--bg);border-color:var(--accent)}
 /* Логи (вкладка Максимумы) */
 .log-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-bottom:1px solid var(--border)}
@@ -18,7 +18,7 @@
 /* Таблица Максимумы — на узких экранах горизонтальный скролл, чтобы не давить колонки */
 .max-table{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;box-shadow:var(--shadow)}
 .max-table-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
-.max-row{display:grid;grid-template-columns:1.3fr 1.1fr 1fr 1fr 1fr;border-bottom:1px solid var(--border);min-width:440px}
+.max-row{display:grid;grid-template-columns:1.3fr 1.1fr 1fr 1fr 1fr;border-bottom:1px solid var(--border)}
 .max-row:last-child{border-bottom:none}
 .max-head{background:var(--accent-dim)}
 .max-head .max-ex,.max-head .max-cell{font-weight:700;color:var(--accent);font-size:.8rem;text-transform:uppercase;letter-spacing:.04em}
@@ -79,12 +79,13 @@
 @media (max-width:480px){
   .main{padding:12px 14px calc(80px + env(safe-area-inset-bottom))}
   .header{padding:12px 14px}
-  .max-ex{padding:12px 10px;font-size:.9rem}
-  .max-cell{padding:10px 6px}
-  .max-w{font-size:.92rem}
-  .max-rep{font-size:.72rem}
-  .base-input{font-size:.88rem;padding:7px 2px}
-  .base-applied{font-size:.6rem}
+  .max-ex{padding:10px 6px;font-size:.82rem}
+  .max-cell{padding:8px 4px;gap:2px}
+  .max-w{font-size:.82rem}
+  .max-rep{font-size:.66rem}
+  .max-tgt{font-size:.6rem}
+  .base-input{font-size:.8rem;padding:6px 2px}
+  .base-applied{font-size:.55rem}
   .set-row{grid-template-columns:1fr 1fr 64px auto;gap:8px;padding:12px 12px}
   .set-reps-input{width:64px;padding:10px 8px}
   .wod-card{padding:16px}
