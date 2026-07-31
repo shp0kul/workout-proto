@@ -18,7 +18,7 @@
 /* Таблица Максимумы — на узких экранах горизонтальный скролл, чтобы не давить колонки */
 .max-table{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;box-shadow:var(--shadow)}
 .max-table-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
-.max-row{display:grid;grid-template-columns:1.3fr 1.1fr 1fr 1fr 1fr;border-bottom:1px solid var(--border)}
+.max-row{display:grid;grid-template-columns:1fr 1.8fr 0.85fr 0.85fr 0.85fr;border-bottom:1px solid var(--border)}
 .max-row:last-child{border-bottom:none}
 .max-head{background:var(--accent-dim)}
 .max-head .max-ex,.max-head .max-cell{font-weight:700;color:var(--accent);font-size:.8rem;text-transform:uppercase;letter-spacing:.04em}
@@ -62,6 +62,7 @@
 .wod-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:20px;box-shadow:var(--shadow);margin-bottom:16px}
 .wod-date{color:var(--text-dim);font-size:.8rem;font-weight:600}
 .wod-title{font-size:1.4rem;font-weight:700;margin:6px 0 14px;color:var(--accent)}
+.wod-format{display:inline-block;background:var(--accent-dim);color:var(--accent);font-size:.72rem;font-weight:700;letter-spacing:.5px;text-transform:uppercase;padding:3px 9px;border-radius:999px;margin:-8px 0 14px}
 .wod-text{font-size:1rem;line-height:1.6;white-space:normal}
 .wod-admin{margin-top:8px;border-top:1px dashed var(--border);padding-top:14px}
 .wod-admin summary{cursor:pointer;color:var(--text-dim);font-size:.9rem;font-weight:600;outline:none}
@@ -78,13 +79,16 @@
 @media (max-width:480px){
   .main{padding:12px 14px calc(80px + env(safe-area-inset-bottom))}
   .header{padding:12px 14px}
-  .max-ex{padding:10px 6px;font-size:.82rem}
-  .max-cell{padding:8px 4px;gap:2px}
+  .max-row{grid-template-columns:0.8fr 2fr 0.85fr 0.85fr 0.85fr}
+  .max-ex{padding:10px 5px;font-size:.78rem}
+  .max-cell{padding:8px 3px;gap:2px}
   .max-w{font-size:.82rem}
   .max-rep{font-size:.66rem}
   .max-tgt{font-size:.6rem}
-  .base-input{font-size:.8rem;padding:6px 2px}
-  .base-applied{font-size:.55rem}
+  .base-input{font-size:.8rem;padding:6px 2px;max-width:58px}
+  .base-step{width:22px;height:26px;font-size:1rem}
+  .base-applied{font-size:.5rem}
+  .base-applied .kg-unit{display:none}
   .set-row{grid-template-columns:1fr 1fr 64px auto;gap:8px;padding:12px 12px}
   .set-reps-input{width:64px;padding:10px 8px}
   .wod-card{padding:16px}
@@ -92,3 +96,17 @@
   .users-bar{gap:6px}
   .utab{padding:8px 12px;font-size:.8rem}
 }
+/* Вкладка «Я»: неактивная — акцентная рамка + зелёный текст (видно, что это ты),
+   активная — зелёный фон как у обычной активной вкладки */
+.utab.me{color:var(--accent);border-color:var(--accent);font-weight:700}
+.utab.me.active{background:var(--accent);color:var(--bg);border-color:var(--accent)}
+/* Кнопки ± у базы в Максимумах — вариант А: минус/плюс по бокам числа, В ОДНУ СТРОКУ.
+   ВАЖНО: .max-cell наследует flex-direction:column — явно переопределяем в row, иначе кнопки упадут в столбец. */
+.base-cell{display:flex;flex-direction:row;flex-wrap:wrap;align-items:center;gap:3px;justify-content:center}
+.base-step{width:24px;height:28px;flex:0 0 auto;border-radius:7px;background:var(--card);color:var(--accent);border:1px solid var(--border);
+  font-size:1.1rem;font-weight:700;cursor:pointer;outline:none;transition:all .15s;line-height:1;display:flex;align-items:center;justify-content:center}
+.base-step:hover{background:var(--accent-dim);border-color:var(--accent)}
+.base-step:active{transform:scale(.92)}
+.base-input{flex:1 1 auto;min-width:0;max-width:64px;width:auto;text-align:center}
+.base-applied{margin-left:4px;font-size:.62rem;white-space:nowrap}
+.base-step-label{flex-basis:100%;margin-top:1px;font-size:.55rem;color:var(--muted);text-align:center}
