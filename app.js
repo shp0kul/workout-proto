@@ -16,6 +16,8 @@ const $$ = (s, c = document) => [...c.querySelectorAll(s)];
 const WEEK_LABELS = { 1: 'Неделя 1', 2: 'Неделя 2', 3: 'Неделя 3', 4: 'Разгрузка' };
 const EX_LIST = ['Приседания', 'Жим стоя', 'Жим лёжа', 'Становая тяга'];
 const EX_SHORT = { 'Приседания': 'Присед', 'Жим стоя': 'Жим стоя', 'Жим лёжа': 'Жим лёжа', 'Становая тяга': 'Тяга' };
+// Шаг кнопок ± у базы в Максимумах (по упражнению). База хранит дробь до сотых, план округляется как раньше.
+const BASE_STEP = { 'Жим стоя': 1.25, 'Жим лёжа': 1.25, 'Становая тяга': 2.5, 'Приседания': 2.5 };
 
 // Безопасный localStorage (Safari в приватном режиме кидает исключение на любое обращение)
 const safeLS = {
@@ -63,6 +65,8 @@ let basesCache = null;
 let appliedBases = null;
 let saveTimers = {};
 let isAdmin = false;
+let tgUserId = null;   // tg-id текущего открывшего (если открыто из Telegram)
+let myUserId = null;   // id строки «Я» (совпавший tg-id), для подсветки
 let currentWod = null;
 let editWodMode = false;
 let dataLoaded = false;
@@ -72,12 +76,17 @@ async function init() {
     Telegram.WebApp.ready();
     Telegram.WebApp.expand();
     var tgU = Telegram.WebApp.initDataUnsafe && Telegram.WebApp.initDataUnsafe.user;
-    if (tgU && tgU.id) isAdmin = ADMIN_IDS.includes(tgU.id);
+    if (tgU && tgU.id) {
+      isAdmin = ADMIN_IDS.includes(tgU.id);
+      tgUserId = tgU.id;   // запоминаем tg-id для авто-привязки «Я»
+    }
   }
-  // Запасной вход для отладки в браузере: ?admin=1
+  // Запасной вход для отладки в браузере: ?admin=1  и выбор «Я» через ?user=ID
   try {
     const params = new URLSearchParams(location.search);
     if (params.get('admin') === '1') isAdmin = true;
+    const pu = params.get('user');
+    if (pu) { tgUserId = null; myUserId = parseInt(pu); currentUser = parseInt(pu); }
   } catch (e) {}
   const last = safeLS.get(LAST_USER_KEY);
   if (last) currentUser = parseInt(last);
@@ -94,6 +103,13 @@ async function loadUsers() {
   try {
     const data = await apiGet({ users: '1' });
     usersList = data.users || [];
+    // Авто-привязка «Я»: если tg-id открывшего совпал с TelegramID атлета — делаем его активным.
+    // Если «Я» уже задан через ?user= в URL (браузерный fallback) — оставляем как есть.
+    if (tgUserId && usersList.length && myUserId == null) {
+      const me = usersList.find(u => String(u.tg_id) === String(tgUserId));
+      if (me) myUserId = me.id;
+    }
+    if (myUserId != null) currentUser = myUserId;
     if (!usersList.find(u => u.id == currentUser)) currentUser = (usersList[0] && usersList[0].id) || currentUser;
   } catch (e) { console.error('Users load error', e); usersList = [{ id: currentUser, name: 'Игорь' }]; }
   buildUserTabs();
@@ -102,10 +118,14 @@ async function loadUsers() {
 function buildUserTabs() {
   const bar = $('#usersBar');
   bar.innerHTML = '';
-  usersList.forEach(u => {
+  // «Я» ставим первым, если привязан по tg-id
+  const ordered = myUserId != null
+    ? [...usersList].sort((a, b) => (a.id == myUserId ? -1 : b.id == myUserId ? 1 : 0))
+    : usersList;
+  ordered.forEach(u => {
     const t = document.createElement('button');
-    t.className = 'utab' + (u.id == currentUser ? ' active' : '');
-    t.textContent = u.name; t.dataset.uid = u.id;
+    t.className = 'utab' + (u.id == currentUser ? ' active' : '') + (u.id == myUserId ? ' me' : '');
+    t.textContent = (u.id == myUserId ? 'Я' : u.name); t.dataset.uid = u.id;
     t.onclick = async () => {
       currentUser = u.id;
       safeLS.set(LAST_USER_KEY, currentUser);
@@ -148,7 +168,10 @@ async function addUser() {
   const name = prompt('Имя нового атлета:');
   if (!name) return;
   try {
-    const res = await apiPost({ action: 'add_user', name });
+    const payload = { action: 'add_user', name };
+    // если открыто из Telegram — сразу привязываем tg-id к новому атлету
+    if (tgUserId) payload.tg_id = tgUserId;
+    const res = await apiPost(payload);
     if (res.success) {
       usersList.push(res.user);
       currentUser = res.user.id;
@@ -290,10 +313,14 @@ function renderMax() {
     r.className = 'max-row';
     const baseVal = basesCache ? basesCache[row.exercise] : row.base;
     const appliedVal = appliedBases ? appliedBases[row.exercise] : baseVal;
+    const step = BASE_STEP[row.exercise] || 1.25;
     let cells = `<div class="max-ex">${EX_SHORT[row.exercise] || row.exercise}</div>`;
-    cells += `<div class="max-cell">
-      <input type="number" class="base-input" data-ex="${row.exercise}" value="${baseVal != null ? baseVal : ''}" placeholder="кг">
-      <span class="base-applied">${appliedVal != null ? appliedVal : '—'} кг</span></div>`;
+    cells += `<div class="max-cell base-cell">
+      <button class="base-step base-minus" data-ex="${row.exercise}" data-step="${step}">−</button>
+      <input type="number" class="base-input" data-ex="${row.exercise}" value="${baseVal != null ? baseVal : ''}" placeholder="кг" step="${step}">
+      <button class="base-step base-plus" data-ex="${row.exercise}" data-step="${step}">+</button>
+      <span class="base-applied">${appliedVal != null ? appliedVal : '—'}<span class="kg-unit"> кг</span></span>
+      <span class="base-step-label">шаг ${step}</span></div>`;
     wkOrder.forEach(w => {
       const d = row.weeks[w] || {};
       const wTxt = d.weight != null ? d.weight : '—';
@@ -322,6 +349,22 @@ function bindMaxEvents() {
   $('#recalcBtn').onclick = doRecalc;
   $$('.base-input').forEach(inp => {
     inp.onchange = () => { if (!basesCache) basesCache = {}; basesCache[inp.dataset.ex] = +inp.value; };
+  });
+  // Кнопки ± у базы: меняют значение на шаг упражнения (дробь до сотых). План не пересчитывается — только по «Перерасчёт весов».
+  $$('.base-step').forEach(btn => {
+    btn.onclick = () => {
+      const ex = btn.dataset.ex;
+      const step = parseFloat(btn.dataset.step) || 1.25;
+      const inp = document.querySelector(`.base-input[data-ex="${ex}"]`);
+      if (!inp) return;
+      let cur = parseFloat(inp.value);
+      if (isNaN(cur)) cur = 0;
+      cur = Math.round((cur + (btn.classList.contains('base-plus') ? step : -step)) * 100) / 100;
+      if (cur < 0) cur = 0;
+      inp.value = cur;
+      if (!basesCache) basesCache = {};
+      basesCache[ex] = cur;
+    };
   });
 }
 
@@ -382,7 +425,7 @@ function renderWod() {
   if (!currentWod) { cont.innerHTML = '<div class="empty">Пока нет актуального WOD 💤</div>'; if (isAdmin) renderWodAdmin(cont); return; }
   const card = document.createElement('div');
   card.className = 'wod-card';
-  card.innerHTML = `<div class="wod-date">${currentWod.date}</div><h2 class="wod-title">${escapeHtml(currentWod.name)}</h2><div class="wod-text">${escapeHtml(currentWod.text).replace(/\n/g, '<br>')}</div>`;
+  card.innerHTML = `<div class="wod-date">${currentWod.date}</div><h2 class="wod-title">${escapeHtml(currentWod.name)}</h2>${currentWod.format ? `<div class="wod-format">${escapeHtml(currentWod.format)}</div>` : ''}<div class="wod-text">${escapeHtml(currentWod.text).replace(/\n/g, '<br>')}</div>`;
   cont.appendChild(card);
   if (isAdmin) renderWodAdmin(cont);
 }
@@ -395,6 +438,7 @@ function renderWodAdmin(cont) {
       <summary>${editing ? '✏️ Редактировать WOD' : '➕ Добавить WOD (админ)'}</summary>
       <div class="wod-form">
         <input type="text" id="wodName" placeholder="Название" class="wod-input" value="${editing ? escapeHtml(currentWod.name) : ''}">
+        <input type="text" id="wodFormat" placeholder="Формат (напр. EMOM, AMRAP, Табата)" class="wod-input" value="${editing ? escapeHtml(currentWod.format || '') : ''}">
         <textarea id="wodText" placeholder="Описание комплекса" class="wod-textarea" rows="5">${editing ? escapeHtml(currentWod.text) : ''}</textarea>
         <button id="wodSave" class="recalc-btn">${editing ? 'Сохранить изменения' : 'Сохранить WOD'}</button>
         ${editing ? '<button id="wodCancel" class="utab">Отмена</button>' : ''}
@@ -414,11 +458,12 @@ function renderWodAdmin(cont) {
   }
   wrap.querySelector('#wodSave').onclick = async () => {
     const name = wrap.querySelector('#wodName').value.trim();
+    const format = wrap.querySelector('#wodFormat').value.trim();
     const text = wrap.querySelector('#wodText').value.trim();
     if (!name) { alert('Введите название'); return; }
     try {
-      if (editing) { await apiPost({ action: 'edit_wod', viewer_id: 594920142, id: currentWod.id, name, text }); flashSync('✅ WOD обновлён'); }
-      else { await apiPost({ action: 'add_wod', viewer_id: 594920142, name, text }); flashSync('✅ WOD добавлен'); }
+      if (editing) { await apiPost({ action: 'edit_wod', viewer_id: 594920142, id: currentWod.id, name, format, text }); flashSync('✅ WOD обновлён'); }
+      else { await apiPost({ action: 'add_wod', viewer_id: 594920142, name, format, text }); flashSync('✅ WOD добавлен'); }
       editWodMode = false; await loadWod();
     } catch (e) { console.error(e); flashSync('🟡 Ошибка'); }
   };
@@ -446,7 +491,7 @@ function renderWodArch(wods, cont) {
       cont.innerHTML = '';
       const card = document.createElement('div');
       card.className = 'wod-card';
-      card.innerHTML = `<div class="wod-date">${w.date}</div><h2 class="wod-title">${escapeHtml(w.name)}</h2><div class="wod-text">${escapeHtml(w.text).replace(/\n/g, '<br>')}</div>`;
+      card.innerHTML = `<div class="wod-date">${w.date}</div><h2 class="wod-title">${escapeHtml(w.name)}</h2>${w.format ? `<div class="wod-format">${escapeHtml(w.format)}</div>` : ''}<div class="wod-text">${escapeHtml(w.text).replace(/\n/g, '<br>')}</div>`;
       cont.appendChild(card);
       const back = document.createElement('button');
       back.className = 'utab'; back.textContent = '← Архив'; back.onclick = () => loadWodArch();
