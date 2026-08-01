@@ -1,6 +1,6 @@
 // ===========================
-// СПОРТ ДНЕВНИК — WebApp v1.2
-// Batch-загрузка + кэш + мгновенный рендер
+// СПОРТ ДНЕВНИК — WebApp v1.9.1
+// Batch-загрузка + кэш + ленивые maxes + самодиагностика
 // ===========================
 
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycby13Q30X_zwMIAGlak9L4uj_P-00Ak75_hFrxrhvC54nhH2qitukv8eHWqtSL1m-nge/exec';
@@ -189,7 +189,6 @@ async function loadBatch() {
     const data = await apiGet({ batch: '1', user_id: currentUser, week: state.week, exercise: state.exercise });
     basesCache = data.bases || {};
     appliedBases = { ...basesCache };
-    maxesCache = data.maxes || [];
     // Фильтруем план по текущей неделе/упражнению (batch вернул весь цикл)
     state.plan = (data.plan || []).filter(p => p.week === state.week && p.exercise === state.exercise);
     setCache(currentUser, data);
@@ -206,9 +205,21 @@ function renderFromCache() {
   if (!c) return;
   basesCache = c.bases || {};
   appliedBases = { ...basesCache };
-  maxesCache = c.maxes || [];
   state.plan = (c.plan || []).filter(p => p.week === state.week && p.exercise === state.exercise);
   render();
+}
+
+// Ленивая загрузка максимумов — только при открытии вкладки «Максимумы»
+async function loadMaxes() {
+  if (maxesCache) { renderMax(); return; }
+  try {
+    const data = await apiGet({ maxes: '1', user_id: currentUser });
+    maxesCache = data.maxes || [];
+    renderMax();
+  } catch (e) {
+    console.error('Maxes load error', e);
+    flashSync('🟡 Ошибка загрузки максимумов');
+  }
 }
 
 function buildTabs() {
@@ -218,9 +229,9 @@ function buildTabs() {
       $$('.tab').forEach(x => x.classList.toggle('active', x.dataset.tab === tab));
       $('#selectors').style.display = (tab === 'strength') ? 'flex' : 'none';
       if (tab === 'strength') render();
-      else if (tab === 'max') renderMax();
-      else if (tab === 'wod') loadWod();
-      else if (tab === 'wodarch') loadWodArch();
+            else if (tab === 'max') loadMaxes();
+            else if (tab === 'wod') loadWod();
+            else if (tab === 'wodarch') loadWodArch();
     };
   });
 }
@@ -463,7 +474,11 @@ function renderWodAdmin(cont) {
     if (!name) { alert('Введите название'); return; }
     try {
       if (editing) { await apiPost({ action: 'edit_wod', viewer_id: 594920142, id: currentWod.id, name, format, text }); flashSync('✅ WOD обновлён'); }
-      else { await apiPost({ action: 'add_wod', viewer_id: 594920142, name, format, text }); flashSync('✅ WOD добавлен'); }
+            else {
+              const res = await apiPost({ action: 'add_wod', viewer_id: 594920142, name, format, text });
+              const ok = res && res.bot_notified;
+              flashSync('✅ WOD добавлен' + (ok ? ' — уведомление отправлено' : ' — ⚠️ бот не оповещён (проверь токен)'));
+            }
       editWodMode = false; await loadWod();
     } catch (e) { console.error(e); flashSync('🟡 Ошибка'); }
   };
