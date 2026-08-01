@@ -1,9 +1,9 @@
 // ===========================
-// СПОРТ ДНЕВНИК — WebApp v1.9.1
+// СПОРТ ДНЕВНИК — WebApp v1.9.3
 // Batch-загрузка + кэш + ленивые maxes + самодиагностика
 // ===========================
 
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycby13Q30X_zwMIAGlak9L4uj_P-00Ak75_hFrxrhvC54nhH2qitukv8eHWqtSL1m-nge/exec';
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzPiQJY9qpn7zldmWitf3NkvMxgtuQe49iKKED9nkh-Yd-EXKCXHbQqScZi835EruE/exec';
 // Твои telegram-id (ПК и телефон) — оба дают админ-права
 const ADMIN_IDS = [594920142, 5941067397];
 const STORAGE_KEY = 'workout_log_v1';
