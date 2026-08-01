@@ -1,6 +1,6 @@
 // ===========================
-// СПОРТ ДНЕВНИК — WebApp v1.9.3
-// Batch-загрузка + кэш + ленивые maxes + самодиагностика
+// СПОРТ ДНЕВНИК — WebApp v1.10
+// Batch-загрузка + кэш + ленивые maxes + зелёная отметка подходов
 // ===========================
 
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzPiQJY9qpn7zldmWitf3NkvMxgtuQe49iKKED9nkh-Yd-EXKCXHbQqScZi835EruE/exec';
@@ -34,6 +34,19 @@ function setStored(key, reps) {
   if (!l.cycle) l.cycle = {};
   l.cycle[key] = { reps, at: Date.now() };
   saveLocal(l);
+}
+function removeStored(key) {
+  const l = loadLocal();
+  if (!l.cycle) l.cycle = {};
+  delete l.cycle[key];
+  saveLocal(l);
+}
+// Зелёная отметка подхода (клик по строке) — toggle
+function toggleDone(key) {
+  const stored = getStored();
+  if (stored[key]) { removeStored(key); }
+  else { setStored(key, 0); }
+  render();
 }
 function cacheKey(uid) { return CACHE_PREFIX + uid; }
 function getCache(uid) { try { return JSON.parse(safeLS.get(cacheKey(uid)) || 'null'); } catch { return null; } }
@@ -286,19 +299,22 @@ function render() {
   state.plan.forEach(s => {
     const key = lk(s);
     allPlansByKey[key] = s;
-    // редактируется только последний рабочий подход — для записи в максимумы
     const editable = (key === editableKey);
     const saved = local[key];
+    const done = !!saved;
     const row = document.createElement('div');
-    row.className = 'set-row ' + (editable ? 'editable' : 'readonly') + (saved ? ' completed' : '');
+    row.className = 'set-row ' + (editable ? 'editable' : 'readonly') + (done ? ' completed' : '');
+    row.dataset.key = key;
     const left = `<div class="set-info">
       <span class="set-label">${s.setType === 'warmup' ? 'Разминка' : 'Рабочий'} ${s.setNum}</span>
       <span class="set-weight">${s.weight} кг</span>
       <span class="set-target">цель: ${targetText(s.targetReps)}</span></div>`;
     if (editable) {
       row.innerHTML = left + `<input type="number" class="set-reps-input" placeholder="повторы" min="0" max="99" data-key="${key}" ${saved ? 'value="' + saved.reps + '"' : ''}>`;
+      row.addEventListener('click', function(e) { if (e.target.tagName !== 'INPUT') toggleDone(key); });
     } else {
       row.innerHTML = left + `<div class="set-plan">${targetText(s.targetReps)}</div>`;
+      row.addEventListener('click', function() { toggleDone(key); });
     }
     g.appendChild(row);
   });
