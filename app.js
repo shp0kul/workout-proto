@@ -296,30 +296,35 @@ function render() {
   const h = document.createElement('div');
   h.className = 'exercise-header'; h.textContent = state.exercise;
   g.appendChild(h);
-  state.plan.forEach(s => {
-    const key = lk(s);
-    allPlansByKey[key] = s;
-    const editable = (key === editableKey);
-    const saved = local[key];
-    const done = !!saved;
-    const row = document.createElement('div');
-    row.className = 'set-row ' + (editable ? 'editable' : 'readonly') + (done ? ' completed' : '');
-    row.dataset.key = key;
-    const left = `<div class="set-info">
-      <span class="set-label">${s.setType === 'warmup' ? 'Разминка' : 'Рабочий'} ${s.setNum}</span>
-      <span class="set-weight">${s.weight} кг</span>
-      <span class="set-target">цель: ${targetText(s.targetReps)}</span></div>`;
-    if (editable) {
-      row.innerHTML = left + `<input type="number" class="set-reps-input" placeholder="повторы" min="0" max="99" data-key="${key}" ${saved ? 'value="' + saved.reps + '"' : ''}>`;
-      row.addEventListener('click', function(e) { if (e.target.tagName !== 'INPUT') toggleDone(key); });
-    } else {
-      row.innerHTML = left + `<div class="set-plan">${targetText(s.targetReps)}</div>`;
-      row.addEventListener('click', function() { toggleDone(key); });
-    }
-    g.appendChild(row);
-  });
-  cont.appendChild(g);
-  bindEvents();
+    state.plan.forEach(s => {
+      const key = lk(s);
+      allPlansByKey[key] = s;
+      const editable = (key === editableKey);
+      const saved = local[key];
+      const done = !!saved;
+      const row = document.createElement('div');
+      row.className = 'set-row ' + (editable ? 'editable' : 'readonly') + (done ? ' completed' : '');
+      row.dataset.key = key;
+      const left = `<div class="set-info">
+        <span class="set-label">${s.setType === 'warmup' ? 'Разминка' : 'Рабочий'} ${s.setNum}</span>
+        <span class="set-weight">${s.weight} кг</span>
+        <span class="set-target">цель: ${targetText(s.targetReps)}</span></div>`;
+      if (editable) {
+        row.innerHTML = left + `<input type="number" class="set-reps-input" placeholder="повторы" min="0" max="99" data-key="${key}" ${saved ? 'value="' + saved.reps + '"' : ''}>`;
+      } else {
+        row.innerHTML = left + `<div class="set-plan">${targetText(s.targetReps)}</div>`;
+      }
+      g.appendChild(row);
+    });
+    // Делегирование кликов: один обработчик на весь список
+    g.onclick = function(e) {
+      var row = e.target.closest('.set-row');
+      if (!row) return;
+      if (e.target.tagName === 'INPUT') return;
+      toggleDone(row.dataset.key);
+    };
+    cont.appendChild(g);
+    bindEvents();
   updateSyncStatus();
 }
 
