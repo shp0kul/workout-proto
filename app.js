@@ -41,11 +41,10 @@ function removeStored(key) {
   delete l.cycle[key];
   saveLocal(l);
 }
-// Зелёная отметка подхода (клик по строке) — toggle
+// Зелёная отметка подхода (клик по строке) — toggle в памяти
 function toggleDone(key) {
-  const stored = getStored();
-  if (stored[key]) { removeStored(key); }
-  else { setStored(key, 0); }
+  if (doneKeys[key]) { delete doneKeys[key]; }
+  else { doneKeys[key] = true; }
   render();
 }
 function cacheKey(uid) { return CACHE_PREFIX + uid; }
@@ -78,11 +77,13 @@ let basesCache = null;
 let appliedBases = null;
 let saveTimers = {};
 let isAdmin = false;
-let tgUserId = null;   // tg-id текущего открывшего (если открыто из Telegram)
-let myUserId = null;   // id строки «Я» (совпавший tg-id), для подсветки
+let tgUserId = null;
+let myUserId = null;
 let currentWod = null;
 let editWodMode = false;
 let dataLoaded = false;
+// Зелёные отметки — в памяти (localStorage ненадёжен в Telegram WebView)
+let doneKeys = {};
 
 async function init() {
   if (window.Telegram && window.Telegram.WebApp) {
@@ -301,7 +302,7 @@ function render() {
       allPlansByKey[key] = s;
       const editable = (key === editableKey);
       const saved = local[key];
-      const done = !!saved;
+      const done = !!doneKeys[key];
       const row = document.createElement('div');
       row.className = 'set-row ' + (editable ? 'editable' : 'readonly') + (done ? ' completed' : '');
       row.dataset.key = key;
@@ -317,12 +318,12 @@ function render() {
       g.appendChild(row);
     });
     // Делегирование кликов: один обработчик на весь список
-    g.onclick = function(e) {
-      var row = e.target.closest('.set-row');
-      if (!row) return;
-      if (e.target.tagName === 'INPUT') return;
-      toggleDone(row.dataset.key);
-    };
+        g.addEventListener('click', function(e) {
+          var row = e.target.closest('.set-row');
+          if (!row) return;
+          if (e.target.tagName === 'INPUT') return;
+          toggleDone(row.dataset.key);
+        });
     cont.appendChild(g);
     bindEvents();
   updateSyncStatus();
